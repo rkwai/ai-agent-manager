@@ -1,48 +1,64 @@
 # src/api/routes.py
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import APIRouter, HTTPException, WebSocket
 from typing import Dict, Any, List
 import logging
 import asyncio
 from datetime import datetime
-import os
 
-# Import our core components
 from src.core.agent_manager import AgentManager
-from src.config.settings import API_HOST, API_PORT
-from src.database.db_setup import initialize_database
+from src.database.db_setup import Database
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Create the FastAPI application
-app = FastAPI(title="AI Agent Management System")
-agent_manager = None
+# Create router instead of app
+router = APIRouter()
 
-def initialize_app(db_path: str):
-    """Initialize the application with database connection"""
-    global agent_manager
-    
-    # Add debug logging
-    logger.info(f"Attempting to initialize database at: {db_path}")
-    
-    # Ensure the directory exists
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    
-    db = initialize_database(db_path)
-    agent_manager = AgentManager(database=db)
+# Initialize database and agent manager
+db = Database("agents.db")
+agent_manager = AgentManager(database=db)
 
-@app.post("/agents/", response_model=Dict[str, str])
-async def create_agent(name: str, config: Dict[str, Any]):
-    """Create a new agent with given configuration"""
+@router.get("/agents")
+async def list_agents():
+    """List all agents"""
     try:
-        agent_id = await agent_manager.create_agent(name, config)
+        agents = await agent_manager.list_agents()
+        return agents
+    except Exception as e:
+        logger.error(f"Failed to list agents: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/agents")
+async def create_agent(agent_data: Dict[str, Any]):
+    """Create a new agent"""
+    try:
+        agent_id = await agent_manager.create_agent(
+            name=agent_data["name"],
+            config={
+                "model_name": "gpt-3.5-turbo",
+                "temperature": 0.7,
+                "tools": []
+            }
+        )
         return {"agent_id": agent_id, "status": "created"}
     except Exception as e:
         logger.error(f"Failed to create agent: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/agents/{agent_id}/start")
+@router.get("/agents/{agent_id}")
+async def get_agent(agent_id: str):
+    """Get agent details"""
+    try:
+        agent = await agent_manager.get_agent(agent_id)
+        return agent
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to get agent: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/agents/{agent_id}/start")
 async def start_agent(agent_id: str):
     """Start an existing agent"""
     try:
@@ -56,7 +72,7 @@ async def start_agent(agent_id: str):
         logger.error(f"Error starting agent: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/agents/{agent_id}/tasks")
+@router.post("/agents/{agent_id}/tasks")
 async def execute_task(agent_id: str, task: Dict[str, Any]):
     """Execute a task with specified agent"""
     try:
@@ -73,7 +89,7 @@ async def execute_task(agent_id: str, task: Dict[str, Any]):
         logger.error(f"Task execution failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/agents/{agent_id}/stop")
+@router.post("/agents/{agent_id}/stop")
 async def stop_agent(agent_id: str):
     """Stop a running agent"""
     try:
@@ -85,7 +101,7 @@ async def stop_agent(agent_id: str):
         logger.error(f"Error stopping agent: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/agents/{agent_id}/status")
+@router.get("/agents/{agent_id}/status")
 async def get_agent_status(agent_id: str):
     """Get current status of an agent"""
     try:
@@ -101,7 +117,7 @@ async def get_agent_status(agent_id: str):
         logger.error(f"Error getting agent status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.websocket("/agents/{agent_id}/ws")
+@router.websocket("/agents/{agent_id}/ws")
 async def agent_websocket(websocket: WebSocket, agent_id: str):
     """WebSocket endpoint for real-time agent updates"""
     await websocket.accept()

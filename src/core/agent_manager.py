@@ -212,3 +212,23 @@ Question: {input}
         except Exception as e:
             logger.error(f"Failed to stop agent {agent_id}: {e}")
             return False
+
+    async def list_agents(self) -> List[Dict[str, Any]]:
+        """List all agents"""
+        try:
+            with self.db.get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT agent_id, name, status, config FROM agents"
+                ).fetchall()
+                
+                return [
+                    {
+                        "id": row["agent_id"],
+                        "name": row["name"],
+                        "status": row["status"]
+                    }
+                    for row in rows
+                ]
+        except Exception as e:
+            logger.error(f"Failed to list agents: {e}")
+            raise

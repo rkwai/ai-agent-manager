@@ -179,7 +179,6 @@ class Database:
         """Get the database connection"""
         return self.conn
 
-
 def initialize_database(db_path):
     """Initialize database with all required tables"""
     db = Database(db_path)
