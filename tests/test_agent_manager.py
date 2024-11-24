@@ -19,6 +19,11 @@ async def test_create_agent(agent_manager, mock_db):
     
     agent_id = await agent_manager.create_agent(agent_config["name"], agent_config)
     
+    # Add this to debug the actual calls
+    print("Database calls:", [
+        call.args for call in mock_cursor.execute.call_args_list
+    ])
+    
     assert agent_id is not None
     assert isinstance(agent_id, str)
     assert uuid.UUID(agent_id)  # Verify it's a valid UUID

@@ -49,27 +49,29 @@ class AgentManager:
         
     async def create_agent(self, name: str, config: Dict[str, Any]) -> str:
         """Create a new agent with given configuration"""
+        agent_id = str(uuid.uuid4())
+        
         # Validate config has required fields
         required_fields = ['tools', 'model_name']
         if not all(field in config for field in required_fields):
             raise ValueError(f"Config missing required fields: {required_fields}")
-        
-        try:
-            agent_id = str(uuid.uuid4())
             
-            # Store in database
+        try:
+            # Store in database using direct SQL instead of helper method
             with self.db.get_conn() as conn:
+                # First insert: Create the agent record
                 conn.execute("""
                     INSERT INTO agents (agent_id, name, config, status)
                     VALUES (?, ?, ?, ?)
-                """, (agent_id, name, json.dumps(config), 'inactive'))
+                """, (agent_id, name, json.dumps(config), "inactive"))
                 
-                # Initialize agent state
+                # Second insert: Initialize agent state
                 conn.execute("""
                     INSERT INTO agent_states (agent_id, memory)
                     VALUES (?, ?)
                 """, (agent_id, json.dumps({})))
                 
+            logger.info(f"Created agent: {agent_id} ({name})")
             return agent_id
             
         except Exception as e:
