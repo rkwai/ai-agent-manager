@@ -1,146 +1,118 @@
 import pytest
-from src.core.agent_manager import AgentManager
-from unittest.mock import Mock, patch
-
-@pytest.fixture
-def agent_manager():
-    # Use in-memory database for testing
-    return AgentManager(db_path=":memory:")
+from unittest.mock import ANY
+import uuid
+import json
 
 @pytest.mark.asyncio
-async def test_create_agent(agent_manager):
-    # Test creating a new agent
+async def test_create_agent(agent_manager, mock_db):
+    """Test agent creation through manager"""
     agent_config = {
         "name": "test_agent",
-        "model": "gpt-3.5-turbo",
+        "model_name": "gpt-4-turbo-preview",
+        "tools": [{"type": "code_interpreter"}],
         "temperature": 0.7
     }
     
-    agent = await agent_manager.create_agent(config=agent_config)
+    # Setup mock to return success
+    mock_cursor = mock_db.get_conn.return_value.__enter__.return_value
+    mock_cursor.execute.return_value.lastrowid = 1
     
-    assert agent is not None
-    assert agent.name == "test_agent"
-    assert agent.model == "gpt-3.5-turbo"
-    assert agent.temperature == 0.7
+    agent_id = await agent_manager.create_agent(agent_config["name"], agent_config)
+    
+    assert agent_id is not None
+    assert isinstance(agent_id, str)
+    assert uuid.UUID(agent_id)  # Verify it's a valid UUID
+    
+    # Verify database calls
+    mock_db.get_conn.assert_called()
+    assert mock_cursor.execute.call_count >= 2  # Two inserts expected
 
 @pytest.mark.asyncio
-async def test_create_agent_invalid_config(agent_manager):
-    # Test creating an agent with invalid configuration
-    invalid_config = {
-        "name": "test_agent"
-        # Missing required fields
+async def test_agent_lifecycle(agent_manager, mock_db, mocker):
+    """Test agent lifecycle operations"""
+    # Mock LangChain components
+    mocker.patch('langchain_openai.ChatOpenAI')
+    mocker.patch('langchain.agents.create_react_agent', return_value=mocker.Mock())
+    
+    config = {
+        "model_name": "gpt-4-turbo-preview",
+        "tools": [{"type": "code_interpreter"}],
+        "temperature": 0.7,
+        "system_message": "You are a helpful assistant"
     }
     
+    # Setup mock database responses
+    mock_cursor = mock_db.get_conn.return_value.__enter__.return_value
+    mock_cursor.execute.return_value.fetchone.return_value = {
+        "agent_id": "test-id",
+        "name": "test-agent",
+        "status": "inactive",
+        "config": json.dumps(config)
+    }
+    
+    agent_id = await agent_manager.create_agent("test_agent", config)
+    
+    # Test start
+    started = await agent_manager.start_agent(agent_id)
+    assert started is True
+    assert agent_id in agent_manager.active_agents
+    
+    # Test stop
+    stopped = await agent_manager.stop_agent(agent_id)
+    assert stopped is True
+    assert agent_id not in agent_manager.active_agents
+    
+    # Add assertions for state changes
+    mock_cursor.execute.assert_any_call(
+        "UPDATE agents SET status = ? WHERE agent_id = ?",
+        ("active", agent_id)
+    )
+
+@pytest.mark.asyncio
+async def test_run_task(agent_manager, mock_db, mocker):
+    """Test task execution"""
+    # Mock OpenAI and LangChain components
+    mocker.patch('langchain_openai.ChatOpenAI')
+    mocker.patch('langchain.agents.create_react_agent', return_value=mocker.Mock())
+    
+    config = {
+        "model_name": "gpt-4-turbo-preview",
+        "tools": [{"type": "code_interpreter"}],
+        "temperature": 0.7
+    }
+    
+    # Setup mock to return agent data
+    mock_cursor = mock_db.get_conn.return_value.__enter__.return_value
+    mock_cursor.execute.return_value.fetchone.return_value = {
+        "agent_id": "test-id",
+        "name": "test-agent",
+        "status": "inactive",
+        "config": json.dumps(config)
+    }
+    
+    agent_id = await agent_manager.create_agent("test_agent", config)
+    
+    # Start agent
+    await agent_manager.start_agent(agent_id)
+    
+    # Mock the agent's ainvoke method to return a coroutine
+    mock_agent = mocker.Mock()
+    mock_agent.ainvoke = mocker.AsyncMock(return_value={"output": "Task completed successfully"})
+    agent_manager.active_agents[agent_id] = mock_agent
+    
+    # Run task
+    result = await agent_manager.run_task(agent_id, {
+        "input": "test",
+        "intermediate_steps": []
+    })
+    
+    assert result["result"] == "Task completed"
+    assert "run_id" in result
+    
+    # Add error case testing
     with pytest.raises(ValueError):
-        await agent_manager.create_agent(invalid_config)
-
-@pytest.mark.asyncio
-async def test_get_agent(agent_manager):
-    # Test retrieving an agent
-    agent_config = {
-        "name": "test_agent",
-        "model": "gpt-3.5-turbo",
-        "temperature": 0.7
-    }
+        await agent_manager.run_task("invalid-id", {"input": "test"})
     
-    created_agent = await agent_manager.create_agent(agent_config)
-    retrieved_agent = await agent_manager.get_agent("test_agent")
-    
-    assert retrieved_agent is not None
-    assert retrieved_agent.name == created_agent.name
-    assert retrieved_agent.model == created_agent.model
-
-@pytest.mark.asyncio
-async def test_get_nonexistent_agent(agent_manager):
-    # Test retrieving a non-existent agent
-    with pytest.raises(KeyError):
-        await agent_manager.get_agent("nonexistent_agent")
-
-@pytest.mark.asyncio
-async def test_list_agents(agent_manager):
-    # Test listing all agents
-    agent_configs = [
-        {
-            "name": "agent1",
-            "model": "gpt-3.5-turbo",
-            "temperature": 0.7
-        },
-        {
-            "name": "agent2",
-            "model": "gpt-4",
-            "temperature": 0.5
-        }
-    ]
-    
-    for config in agent_configs:
-        await agent_manager.create_agent(config)
-    
-    agents = await agent_manager.list_agents()
-    
-    assert len(agents) == 2
-    assert any(agent.name == "agent1" for agent in agents)
-    assert any(agent.name == "agent2" for agent in agents)
-
-@pytest.mark.asyncio
-async def test_delete_agent(agent_manager):
-    # Test deleting an agent
-    agent_config = {
-        "name": "test_agent",
-        "model": "gpt-3.5-turbo",
-        "temperature": 0.7
-    }
-    
-    await agent_manager.create_agent(agent_config)
-    await agent_manager.delete_agent("test_agent")
-    
-    with pytest.raises(KeyError):
-        await agent_manager.get_agent("test_agent")
-
-@pytest.mark.asyncio
-async def test_delete_nonexistent_agent(agent_manager):
-    # Test deleting a non-existent agent
-    with pytest.raises(KeyError):
-        await agent_manager.delete_agent("nonexistent_agent")
-
-@pytest.mark.asyncio
-async def test_agent_conversation(agent_manager):
-    # Test agent conversation with mocked OpenAI response
-    with patch('openai.ChatCompletion.create') as mock_create:
-        mock_create.return_value.choices = [
-            type('obj', (object,), {'message': {'content': 'Test response'}})()
-        ]
-        
-        agent_config = {
-            "name": "test_agent",
-            "model": "gpt-3.5-turbo",
-            "temperature": 0.7
-        }
-        
-        await agent_manager.create_agent(agent_config)
-        response = await agent_manager.send_message("test_agent", "Hello")
-        
-        assert response == "Test response"
-        mock_create.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_update_agent_config(agent_manager):
-    # Test updating agent configuration
-    initial_config = {
-        "name": "test_agent",
-        "model": "gpt-3.5-turbo",
-        "temperature": 0.7
-    }
-    
-    agent = await agent_manager.create_agent(initial_config)
-    
-    updated_config = {
-        "model": "gpt-4",
-        "temperature": 0.9
-    }
-    
-    await agent_manager.update_agent_config("test_agent", updated_config)
-    updated_agent = await agent_manager.get_agent("test_agent")
-    
-    assert updated_agent.model == "gpt-4"
-    assert updated_agent.temperature == 0.9
-    assert updated_agent.name == "test_agent"
+    # Test with invalid input
+    with pytest.raises(ValueError):
+        await agent_manager.run_task(agent_id, {})

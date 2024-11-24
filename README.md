@@ -121,7 +121,7 @@ POST /api/v1/agents/{agent_id}/tasks
 ## 🗄️ Project Structure
 
 ```
-aim/
+ai-agent-manager/
 ├── src/
 │   ├── api/           # API endpoints and routing
 │   ├── config/        # Configuration and settings

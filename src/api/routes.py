@@ -4,10 +4,12 @@ from typing import Dict, Any, List
 import logging
 import asyncio
 from datetime import datetime
+import os
 
 # Import our core components
 from src.core.agent_manager import AgentManager
 from src.config.settings import API_HOST, API_PORT
+from src.database.db_setup import initialize_database
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -15,7 +17,20 @@ logger = logging.getLogger(__name__)
 
 # Create the FastAPI application
 app = FastAPI(title="AI Agent Management System")
-agent_manager = AgentManager()
+agent_manager = None
+
+def initialize_app(db_path: str):
+    """Initialize the application with database connection"""
+    global agent_manager
+    
+    # Add debug logging
+    logger.info(f"Attempting to initialize database at: {db_path}")
+    
+    # Ensure the directory exists
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    
+    db = initialize_database(db_path)
+    agent_manager = AgentManager(database=db)
 
 @app.post("/agents/", response_model=Dict[str, str])
 async def create_agent(name: str, config: Dict[str, Any]):

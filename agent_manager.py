@@ -7,14 +7,14 @@ import logging
 from langchain.llms import OpenAI
 from langchain.agents import initialize_agent, AgentType
 from langchain.memory import ConversationBufferMemory
-from db_setup import AgentDB
+from src.database.db_setup import Database
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class AgentManager:
     def __init__(self, db_path: str = "agents.db"):
-        self.db = AgentDB(db_path)
+        self.db = Database(db_path)
         self.active_agents = {}  # In-memory cache of active agents
         
     async def create_agent(self, name: str, config: Dict[str, Any]) -> str:
@@ -156,30 +156,3 @@ class AgentManager:
         except Exception as e:
             logger.error(f"Failed to stop agent {agent_id}: {e}")
             return False
-
-# Test basic functionality
-if __name__ == "__main__":
-    import asyncio
-    
-    async def test_manager():
-        manager = AgentManager()
-        
-        # Create test agent
-        config = {
-            "model_name": "gpt-3.5-turbo",
-            "tools": [],  # Empty for testing
-            "temperature": 0.7
-        }
-        
-        agent_id = await manager.create_agent("Test Agent", config)
-        print(f"Created agent: {agent_id}")
-        
-        # Start agent
-        started = await manager.start_agent(agent_id)
-        print(f"Started agent: {started}")
-        
-        # Stop agent
-        stopped = await manager.stop_agent(agent_id)
-        print(f"Stopped agent: {stopped}")
-    
-    asyncio.run(test_manager())

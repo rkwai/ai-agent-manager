@@ -1,34 +1,13 @@
 # src/database/db_setup.py
 import sqlite3
-from datetime import datetime
 import logging
 
 logger = logging.getLogger(__name__)
 
-def adapt_datetime(dt: datetime) -> str:
-    """Convert datetime to string for SQLite storage"""
-    return dt.isoformat()
-
-def convert_datetime(s: bytes) -> datetime:
-    """Convert string from SQLite back to datetime"""
-    try:
-        return datetime.fromisoformat(s.decode())
-    except Exception as e:
-        logger.warning(f"Failed to parse datetime: {e}")
-        return None
-
 class Database:
     def __init__(self, db_path: str):
-        # Register custom datetime adapter and converter
-        sqlite3.register_adapter(datetime, adapt_datetime)
-        sqlite3.register_converter("datetime", convert_datetime)
-        
-        # Use detect_types to enable datetime conversion
-        self.conn = sqlite3.connect(
-            db_path,
-            detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
-        )
-        # Enable row_factory to allow dict-like access to rows
+        # Create the connection first
+        self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
         
         # Create tables if they don't exist
@@ -39,7 +18,7 @@ class Database:
                 name TEXT UNIQUE NOT NULL,
                 model TEXT NOT NULL,
                 temperature REAL NOT NULL,
-                created_at datetime NOT NULL
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
         
@@ -49,7 +28,7 @@ class Database:
                 agent_id INTEGER NOT NULL,
                 user_message TEXT NOT NULL,
                 agent_response TEXT NOT NULL,
-                timestamp datetime NOT NULL,
+                timestamp TIMESTAMP NOT NULL,
                 FOREIGN KEY (agent_id) REFERENCES agents (id)
             )
         """)
@@ -200,4 +179,39 @@ class Database:
         """Get the database connection"""
         return self.conn
 
-    # ... other methods ...
+
+def initialize_database(db_path):
+    """Initialize database with all required tables"""
+    db = Database(db_path)
+    with db.get_conn() as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        
+        # Create tables
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS agents (
+                agent_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                config TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            
+            CREATE TABLE IF NOT EXISTS agent_states (
+                agent_id TEXT PRIMARY KEY,
+                memory TEXT NOT NULL,
+                FOREIGN KEY (agent_id) REFERENCES agents (agent_id)
+            );
+            
+            CREATE TABLE IF NOT EXISTS agent_runs (
+                run_id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                task TEXT NOT NULL,
+                status TEXT NOT NULL,
+                result TEXT,
+                started_at TIMESTAMP NOT NULL,
+                completed_at TIMESTAMP,
+                FOREIGN KEY (agent_id) REFERENCES agents (agent_id)
+            );
+        """)
+        conn.commit()
+    return db

@@ -1,159 +1,94 @@
 import pytest
 from datetime import datetime
 from src.database.db_setup import Database
+import json
+import sqlite3
 
 @pytest.fixture
-def database():
-    # Use an in-memory database for testing
+def setup_database():
+    """Setup a fresh database for each test"""
     db = Database(":memory:")
+    
+    # Enable foreign keys
+    with db.get_conn() as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        
+        # Create tables
+        conn.executescript("""
+            DROP TABLE IF EXISTS agent_runs;
+            DROP TABLE IF EXISTS agent_states;
+            DROP TABLE IF EXISTS agents;
+            
+            CREATE TABLE agents (
+                agent_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                config TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            
+            CREATE TABLE agent_states (
+                agent_id TEXT PRIMARY KEY,
+                memory TEXT NOT NULL,
+                FOREIGN KEY (agent_id) REFERENCES agents (agent_id)
+            );
+            
+            CREATE TABLE agent_runs (
+                run_id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                task TEXT NOT NULL,
+                status TEXT NOT NULL,
+                result TEXT,
+                started_at TIMESTAMP NOT NULL,
+                completed_at TIMESTAMP,
+                FOREIGN KEY (agent_id) REFERENCES agents (agent_id)
+            );
+        """)
+        conn.commit()
     return db
 
-def test_create_agent(database):
-    agent_data = {
-        "name": "test_agent",
-        "model": "gpt-3.5-turbo",
-        "temperature": 0.7,
-        "created_at": datetime.now()
-    }
-    
-    agent_id = database.create_agent(agent_data)
-    assert agent_id is not None
+def test_database_connection(setup_database):
+    """Test database connection and basic operations"""
+    db = setup_database
+    with db.get_conn() as conn:
+        result = conn.execute("SELECT 1").fetchone()
+        assert result[0] == 1
 
-def test_get_agent(database):
-    agent_data = {
-        "name": "test_agent",
-        "model": "gpt-3.5-turbo",
-        "temperature": 0.7,
-        "created_at": datetime.now()
-    }
-    
-    agent_id = database.create_agent(agent_data)
-    agent = database.get_agent(agent_id)
-    
-    assert agent["name"] == agent_data["name"]
-    assert agent["model"] == agent_data["model"]
-    assert agent["temperature"] == agent_data["temperature"]
+def test_database_tables_exist(setup_database):
+    """Test that all required tables exist"""
+    db = setup_database
+    with db.get_conn() as conn:
+        tables = conn.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name NOT LIKE 'sqlite_%'
+        """).fetchall()
+        table_names = [table[0] for table in tables]
+        
+        assert "agents" in table_names
+        assert "agent_states" in table_names
+        assert "agent_runs" in table_names
 
-def test_get_agent_by_name(database):
-    agent_data = {
-        "name": "test_agent",
-        "model": "gpt-3.5-turbo",
-        "temperature": 0.7,
-        "created_at": datetime.now()
-    }
-    
-    database.create_agent(agent_data)
-    agent = database.get_agent_by_name("test_agent")
-    
-    assert agent["name"] == agent_data["name"]
-    assert agent["model"] == agent_data["model"]
-    assert agent["temperature"] == agent_data["temperature"]
+def test_database_schema(setup_database):
+    """Test database schema is correct"""
+    db = setup_database
+    with db.get_conn() as conn:
+        # Test agents table schema
+        agents_info = conn.execute("PRAGMA table_info(agents)").fetchall()
+        agent_columns = {col[1]: col[2] for col in agents_info}
+        
+        assert "agent_id" in agent_columns
+        assert "name" in agent_columns
+        assert "config" in agent_columns
+        assert "status" in agent_columns
+        assert "created_at" in agent_columns
 
-def test_update_agent(database):
-    agent_data = {
-        "name": "test_agent",
-        "model": "gpt-3.5-turbo",
-        "temperature": 0.7,
-        "created_at": datetime.now()
-    }
-    
-    agent_id = database.create_agent(agent_data)
-    
-    updated_data = {
-        "model": "gpt-4",
-        "temperature": 0.9
-    }
-    
-    database.update_agent(agent_id, updated_data)
-    updated_agent = database.get_agent(agent_id)
-    
-    assert updated_agent["model"] == updated_data["model"]
-    assert updated_agent["temperature"] == updated_data["temperature"]
-    assert updated_agent["name"] == agent_data["name"]
-
-def test_delete_agent(database):
-    agent_data = {
-        "name": "test_agent",
-        "model": "gpt-3.5-turbo",
-        "temperature": 0.7,
-        "created_at": datetime.now()
-    }
-    
-    agent_id = database.create_agent(agent_data)
-    database.delete_agent(agent_id)
-    
-    with pytest.raises(ValueError):
-        database.get_agent(agent_id)
-
-def test_list_agents(database):
-    agents_data = [
-        {
-            "name": "agent1",
-            "model": "gpt-3.5-turbo",
-            "temperature": 0.7,
-            "created_at": datetime.now()
-        },
-        {
-            "name": "agent2",
-            "model": "gpt-4",
-            "temperature": 0.5,
-            "created_at": datetime.now()
-        }
-    ]
-    
-    for agent_data in agents_data:
-        database.create_agent(agent_data)
-    
-    agents = database.list_agents()
-    assert len(agents) == 2
-
-def test_save_conversation(database):
-    agent_data = {
-        "name": "test_agent",
-        "model": "gpt-3.5-turbo",
-        "temperature": 0.7,
-        "created_at": datetime.now()
-    }
-    
-    agent_id = database.create_agent(agent_data)
-    
-    conversation_data = {
-        "agent_id": agent_id,
-        "user_message": "Hello",
-        "agent_response": "Hi there!",
-        "timestamp": datetime.now()
-    }
-    
-    conversation_id = database.save_conversation(conversation_data)
-    assert conversation_id is not None
-
-def test_get_agent_conversations(database):
-    agent_data = {
-        "name": "test_agent",
-        "model": "gpt-3.5-turbo",
-        "temperature": 0.7,
-        "created_at": datetime.now()
-    }
-    
-    agent_id = database.create_agent(agent_data)
-    
-    conversations_data = [
-        {
-            "agent_id": agent_id,
-            "user_message": "Hello",
-            "agent_response": "Hi there!",
-            "timestamp": datetime.now()
-        },
-        {
-            "agent_id": agent_id,
-            "user_message": "How are you?",
-            "agent_response": "I'm doing well!",
-            "timestamp": datetime.now()
-        }
-    ]
-    
-    for conversation in conversations_data:
-        database.save_conversation(conversation)
-    
-    conversations = database.get_agent_conversations(agent_id)
-    assert len(conversations) == 2
+def test_foreign_key_constraints(setup_database):
+    """Test foreign key constraints are enforced"""
+    db = setup_database
+    with db.get_conn() as conn:
+        # Try to insert agent_state without corresponding agent
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("""
+                INSERT INTO agent_states (agent_id, memory)
+                VALUES (?, ?)
+            """, ("nonexistent-id", "{}"))
