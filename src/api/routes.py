@@ -80,7 +80,9 @@ async def get_agent(agent_id: str):
     """Get a specific agent by ID"""
     try:
         agent = await agent_manager.get_agent(agent_id)
-        return agent
+        # Convert agent to dict, excluding non-serializable fields
+        agent_dict = agent.to_dict()
+        return agent_dict
     except ValueError as e:
         logger.error(f"Agent not found: {agent_id}")
         raise HTTPException(status_code=404, detail=str(e))

@@ -33,8 +33,8 @@ class ConfigManager:
             logging.warning(f"Failed to load config from database: {e}. Using empty config.")
             return {}
 
-    def _save_config(self, config: Dict[str, Any]) -> None:
-        """Save agent configuration to database"""
+    def update_config(self, config: Dict[str, Any]) -> None:
+        """Update agent configuration in database"""
         try:
             cursor = self.db_conn.cursor()
             cursor.execute(
@@ -42,12 +42,7 @@ class ConfigManager:
                 (json.dumps(config), self.agent_id)
             )
             self.db_conn.commit()
+            self._config = config
         except Exception as e:
-            logging.error(f"Failed to save config to database: {e}")
-
-    def update_config(self, updates: Dict[str, Any]) -> None:
-        """Update configuration with new values"""
-        current_config = self.get_config()
-        new_config = {**current_config, **updates}
-        self._save_config(new_config)
-        self._config = new_config  # Update cache
+            logging.error(f"Failed to update config in database: {e}")
+            raise

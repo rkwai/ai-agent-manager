@@ -41,7 +41,8 @@ class AgentManager:
                 logger.error(f"Failed to parse config JSON: {e}")
                 config = {}
             
-            agent_type = row.get('type', 'default')
+            # Get agent type from row, default to 'default' if not present
+            agent_type = row['type'] if 'type' in row.keys() else 'default'
             logger.info(f"Creating agent with type: {agent_type}")
             
             # Get the appropriate agent class
@@ -49,16 +50,18 @@ class AgentManager:
             logger.info(f"Using agent class: {agent_class.__name__}")
             
             # Create agent instance with safe type conversion
-            agent = agent_class(
-                id=row['agent_id'],
-                name=row['name'],
-                type=agent_type,
-                model_name=config.get('model_name', 'gpt-3.5-turbo'),
-                tools=config.get('tools', []),
-                temperature=float(config.get('temperature', 0.7)),
-                status=row['status'],
-                created_at=row['created_at']
-            )
+            with self.db.get_conn() as conn:
+                agent = agent_class(
+                    id=row['agent_id'],
+                    name=row['name'],
+                    type=agent_type,
+                    model_name=config.get('model_name', 'gpt-3.5-turbo'),
+                    tools=config.get('tools', []),
+                    temperature=float(config.get('temperature', 0.7)),
+                    status=row['status'],
+                    created_at=row['created_at'],
+                    db_conn=conn
+                )
             
             logger.info(f"Successfully created agent instance: {agent.to_dict()}")
             return agent

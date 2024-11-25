@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Dict, Any
+from sqlite3 import Connection
 
 @dataclass
 class Agent:
@@ -13,6 +14,7 @@ class Agent:
     status: str = 'inactive'
     type: str = 'default'
     created_at: Optional[datetime] = None
+    db_conn: Optional[Connection] = None
     
     def __post_init__(self):
         """Validate agent attributes after initialization"""
@@ -29,7 +31,9 @@ class Agent:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Agent':
         """Create an Agent instance from a dictionary"""
-        return cls(
+        # Extract db_conn from data if present
+        db_conn = data.pop('db_conn', None)
+        agent = cls(
             id=data['agent_id'],
             name=data['name'],
             type=data.get('type', 'default'),
@@ -37,11 +41,17 @@ class Agent:
             tools=data.get('tools', []),
             temperature=float(data.get('temperature', 0.7)),
             status=data.get('status', 'inactive'),
-            created_at=data.get('created_at')
+            created_at=data.get('created_at'),
+            db_conn=db_conn
         )
+        # Put db_conn back in data if it was present
+        if db_conn is not None:
+            data['db_conn'] = db_conn
+        return agent
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert Agent instance to dictionary"""
+        # Exclude db_conn from serialization as it's not JSON-serializable
         return {
             "agent_id": self.id,
             "name": self.name,

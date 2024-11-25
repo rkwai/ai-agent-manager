@@ -7,11 +7,11 @@ logger = logging.getLogger(__name__)
 class Database:
     def __init__(self, db_path: str):
         """Initialize database with schema"""
-        self.conn = sqlite3.connect(db_path)
-        self.conn.row_factory = sqlite3.Row
+        self.db_path = db_path
+        self.conn = self._create_connection()
         
         # Enable foreign keys
-        with self.conn as conn:
+        with self.get_conn() as conn:
             conn.execute("PRAGMA foreign_keys = ON")
             
             # Create tables with consistent schema
@@ -51,9 +51,17 @@ class Database:
                     FOREIGN KEY (agent_id) REFERENCES agents (agent_id)
                 );
             """)
-
+    
+    def _create_connection(self):
+        """Create a new database connection with proper configuration"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+    
     def get_conn(self):
-        """Get the database connection"""
+        """Get a properly configured database connection"""
+        if self.conn is None:
+            self.conn = self._create_connection()
         return self.conn
 
     def list_agents(self):

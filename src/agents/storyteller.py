@@ -53,6 +53,8 @@ class StorytellerAgent(Agent):
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if not hasattr(self, 'db_conn') or self.db_conn is None:
+            raise ValueError("Database connection is required for StorytellerAgent")
         self.config_manager = ConfigManager(
             agent_id=self.id,
             db_conn=self.db_conn,
