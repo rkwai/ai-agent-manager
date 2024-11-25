@@ -2,6 +2,7 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass
 import openai
 import uuid
+from openai import AsyncOpenAI
 
 from src.core.agent import Agent
 from src.core.config_manager import ConfigManager
@@ -73,7 +74,15 @@ class StorytellerAgent(Agent):
         config_dict = self.config_manager.get_config()
         # Merge with defaults to ensure all required fields exist
         config_dict = {**self.DEFAULT_CONFIG, **config_dict}
-        return StorytellerConfig(**config_dict)
+        # Only pass the fields that StorytellerConfig expects
+        storyteller_config = {
+            'target_age_range': config_dict.get('target_age_range', self.DEFAULT_CONFIG['target_age_range']),
+            'story_length': config_dict.get('story_length', self.DEFAULT_CONFIG['story_length']),
+            'system_prompt': config_dict.get('system_prompt', self.DEFAULT_CONFIG['system_prompt']),
+            'story_prompt_template': config_dict.get('story_prompt_template', self.DEFAULT_CONFIG['story_prompt_template']),
+            'theme_prompt_template': config_dict.get('theme_prompt_template', self.DEFAULT_CONFIG['theme_prompt_template'])
+        }
+        return StorytellerConfig(**storyteller_config)
     
     async def generate_story(self, theme: Optional[str] = None) -> str:
         """Generate a children's story
@@ -93,7 +102,8 @@ class StorytellerAgent(Agent):
         prompt = config.format_story_prompt(theme_prompt)
             
         try:
-            response = await openai.ChatCompletion.create(
+            client = AsyncOpenAI()
+            response = await client.chat.completions.create(
                 model=self.model_name,
                 messages=[{
                     "role": "system",

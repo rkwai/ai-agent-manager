@@ -154,6 +154,94 @@
         #tools {
             height: 100px;
         }
+        .run-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        .run-time {
+            font-size: 0.8em;
+            color: #666;
+        }
+
+        .run-task {
+            font-size: 0.9em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .run-info {
+            margin-bottom: 20px;
+        }
+
+        .run-task-details, .run-result {
+            margin-top: 20px;
+        }
+
+        .run-task-details pre, .run-result pre {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+
+        .panel-content {
+            display: flex;
+            gap: 20px;
+            margin-top: 15px;
+            background-color: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+        }
+
+        .runs-panel {
+            margin-top: 20px;
+        }
+
+        .runs-header {
+            background-color: #f8f9fa;
+            padding: 10px 15px;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .runs-header:hover {
+            background-color: #e9ecef;
+        }
+
+        .runs-header h3 {
+            margin: 0;
+        }
+
+        .runs-header .toggle-icon {
+            font-size: 1.2em;
+            transition: transform 0.3s ease;
+        }
+
+        .runs-header .toggle-icon.expanded {
+            transform: rotate(180deg);
+        }
+
+        .runs-content {
+            border: 1px solid #dee2e6;
+            border-top: none;
+            border-radius: 0 0 4px 4px;
+            padding: 15px;
+            display: none;
+        }
+
+        .runs-content.expanded {
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -234,6 +322,16 @@
                         <textarea id="agentConfig" rows="10" style="width: 100%"></textarea>
                     </div>
 
+                    <div class="runs-panel">
+                        <div class="runs-header" onclick="toggleRuns()">
+                            <h3>Agent Runs</h3>
+                            <span class="toggle-icon">▼</span>
+                        </div>
+                        <div class="runs-content" id="runsContent">
+                            <div id="runsList"></div>
+                        </div>
+                    </div>
+
                     <div class="output-panel">
                         <h3>Output</h3>
                         <div id="agentOutput"></div>
@@ -245,6 +343,7 @@
 
     <script>
         let selectedAgent = null;
+        let selectedRun = null;
 
         async function loadAgents() {
             try {
@@ -387,6 +486,12 @@
                 stateElement.textContent = agent.status;
                 stateElement.className = 'agent-state';
                 stateElement.classList.add(`state-${agent.status.toLowerCase()}`);
+
+                // Load runs
+                await loadAgentRuns();
+                // Automatically expand runs panel when agent is selected
+                document.getElementById('runsContent').classList.add('expanded');
+                document.querySelector('.runs-header .toggle-icon').classList.add('expanded');
             } catch (error) {
                 console.error('Error selecting agent:', error);
                 showError('Failed to load agent details');
@@ -403,19 +508,34 @@
                 }
                 const agent = await agentResponse.json();
 
-                // Prepare task input
-                const taskInput = prompt('Enter task for the agent:', '');
-                if (!taskInput) return;  // User cancelled
+                // Prepare task input based on agent type
+                let taskData;
+                if (agent.type === 'storyteller') {
+                    const theme = prompt('Enter a theme for the story:', '');
+                    if (!theme) return;  // User cancelled
+                    taskData = {
+                        task: "generate_story",
+                        params: {
+                            theme: theme
+                        }
+                    };
+                } else {
+                    const taskInput = prompt('Enter task for the agent:', '');
+                    if (!taskInput) return;  // User cancelled
+                    taskData = {
+                        task: "default",
+                        params: {
+                            input: taskInput
+                        }
+                    };
+                }
 
                 const response = await fetch(`/api/agents/${selectedAgent}/tasks`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({
-                        input: taskInput,
-                        config: agent.config
-                    })
+                    body: JSON.stringify(taskData)
                 });
                 
                 if (!response.ok) {
@@ -503,6 +623,108 @@
             }
         }
 
+        async function loadAgentRuns() {
+            if (!selectedAgent) return;
+            
+            try {
+                const response = await fetch(`/api/agents/${selectedAgent}/runs`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const runs = await response.json();
+                
+                const runsList = document.getElementById('runsList');
+                if (runs.length === 0) {
+                    runsList.innerHTML = '<div class="info">No runs yet</div>';
+                    return;
+                }
+                
+                runsList.innerHTML = runs.map(run => `
+                    <div class="run-item ${run.run_id === selectedRun ? 'selected' : ''}" 
+                         onclick="toggleRunDetails('${run.run_id}', this)">
+                        <div class="run-header">
+                            <span class="run-status state-${run.status.toLowerCase()}">${run.status}</span>
+                            <span class="run-time">${new Date(run.started_at).toLocaleString()}</span>
+                        </div>
+                        <div class="run-task">
+                            ${formatTask(run.task)}
+                        </div>
+                        <div class="run-details" id="details-${run.run_id}">
+                            <div class="run-info">
+                                <p><strong>Started:</strong> ${new Date(run.started_at).toLocaleString()}</p>
+                                ${run.completed_at ? 
+                                    `<p><strong>Completed:</strong> ${new Date(run.completed_at).toLocaleString()}</p>` : 
+                                    ''}
+                            </div>
+                            <div class="run-task-details">
+                                <h4>Task Details</h4>
+                                <pre>${JSON.stringify(run.task, null, 2)}</pre>
+                            </div>
+                            <div class="run-result">
+                                <h4>Result</h4>
+                                <pre>${formatResult(run.result)}</pre>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+                
+            } catch (error) {
+                console.error('Error loading runs:', error);
+                document.getElementById('runsList').innerHTML = 
+                    '<div class="error">Failed to load runs</div>';
+            }
+        }
+
+        function formatTask(task) {
+            if (task.task === "generate_story") {
+                return `Story: ${task.params?.theme || 'No theme'}`;
+            }
+            if (task.task === "default") {
+                return `Task: ${task.params?.input || 'No input'}`;
+            }
+            if (task.raw) {
+                return `Raw task: ${task.raw}`;
+            }
+            return JSON.stringify(task);
+        }
+
+        function formatResult(result) {
+            try {
+                if (typeof result === 'string') {
+                    return result;
+                }
+                if (result.result) {
+                    return result.result;
+                }
+                if (result.raw) {
+                    return result.raw;
+                }
+                return JSON.stringify(result, null, 2);
+            } catch (e) {
+                return 'Error displaying result';
+            }
+        }
+
+        function toggleRunDetails(runId, element) {
+            selectedRun = runId;
+            
+            // Update selected state
+            document.querySelectorAll('.run-item').forEach(item => {
+                item.classList.remove('selected');
+            });
+            element.classList.add('selected');
+            
+            // Toggle details
+            const details = document.getElementById(`details-${runId}`);
+            document.querySelectorAll('.run-details').forEach(detail => {
+                if (detail !== details) {
+                    detail.classList.remove('active');
+                }
+            });
+            details.classList.toggle('active');
+        }
+
+        // Update pollAgentOutput to use loadAgentRuns
         async function pollAgentOutput() {
             if (!selectedAgent) return;
             
@@ -511,26 +733,45 @@
                 clearInterval(window.outputInterval);
             }
             
+            // Initial load
+            await loadAgentRuns();
+            await updateAgentStatus();  // Add initial status update
+            
             window.outputInterval = setInterval(async () => {
                 try {
-                    const response = await fetch(`/api/agents/${selectedAgent}/output`);
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    const data = await response.json();
-                    const output = data.output || [];
-                    
-                    document.getElementById('agentOutput').innerHTML = 
-                        Array.isArray(output) ? output.map(line => `<div>${line}</div>`).join('') : 
-                        '<div class="error">Invalid output format</div>';
-                        
+                    await loadAgentRuns();
+                    await updateAgentStatus();  // Add status update to polling
                 } catch (error) {
-                    console.error('Error polling output:', error);
-                    document.getElementById('agentOutput').innerHTML = 
-                        '<div class="error">Failed to get agent output</div>';
+                    console.error('Error polling runs:', error);
                     clearInterval(window.outputInterval);
                 }
-            }, 1000);
+            }, 3000);
+        }
+
+        // Add new function to update agent status
+        async function updateAgentStatus() {
+            if (!selectedAgent) return;
+            
+            try {
+                const response = await fetch(`/api/agents/${selectedAgent}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const agent = await response.json();
+                
+                // Update the status display
+                const stateElement = document.getElementById('agentState');
+                stateElement.textContent = agent.status;
+                stateElement.className = 'agent-state';
+                stateElement.classList.add(`state-${agent.status.toLowerCase()}`);
+                
+                // If agent is no longer running, stop polling
+                if (agent.status !== 'RUNNING') {
+                    clearInterval(window.outputInterval);
+                }
+            } catch (error) {
+                console.error('Error updating agent status:', error);
+            }
         }
 
         // Load agents and agent types when page loads
@@ -640,6 +881,14 @@
                 console.error('Error:', error);
                 showError(error.message || `Failed to ${isEdit ? 'update' : 'create'} agent`);
             }
+        }
+
+        function toggleRuns() {
+            const content = document.getElementById('runsContent');
+            const icon = document.querySelector('.runs-header .toggle-icon');
+            
+            content.classList.toggle('expanded');
+            icon.classList.toggle('expanded');
         }
     </script>
 </body>

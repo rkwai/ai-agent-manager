@@ -134,20 +134,39 @@ class AgentManager:
             raise
             
     async def run_task(self, agent_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
-        """Run a task with the specified agent
-        
-        Args:
-            agent_id: ID of the agent to use
-            task: Task configuration and parameters
+        """Execute a task with specified agent"""
+        try:
+            # Get agent instance
+            agent = await self.get_agent(agent_id)
+            if not agent:
+                raise ValueError(f"Agent {agent_id} not found")
             
-        Returns:
-            Task execution results
+            run_id = str(uuid.uuid4())
+            started_at = datetime.utcnow()
             
-        Raises:
-            ValueError: If agent not found
-        """
-        agent = await self.get_agent(agent_id)
-        return await agent.execute_task(task)
+            # Record task start
+            with self.db.get_conn() as conn:
+                conn.execute("""
+                    INSERT INTO agent_runs 
+                    (run_id, agent_id, task, status, started_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (run_id, agent_id, json.dumps(task), 'running', started_at))
+            
+            # Execute task
+            result = await agent.execute_task(task)
+            
+            # Update run record
+            with self.db.get_conn() as conn:
+                conn.execute("""
+                    UPDATE agent_runs 
+                    SET status = ?, result = ?, completed_at = ?
+                    WHERE run_id = ?
+                """, ('completed', json.dumps(result), datetime.utcnow(), run_id))
+            
+            return result
+        except Exception as e:
+            logger.error(f"Failed to run task: {e}")
+            raise
 
     async def get_all_agents(self) -> List[Dict[str, Any]]:
         """Get all agents from the database"""

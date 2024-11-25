@@ -138,3 +138,84 @@ async def delete_agent(agent_id: str):
     except Exception as e:
         logger.error(f"Failed to delete agent: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/agents/{agent_id}/output")
+async def get_agent_output(agent_id: str):
+    """Get the latest output for an agent"""
+    try:
+        with db.get_conn() as conn:
+            # Get the most recent run for this agent
+            cursor = conn.execute("""
+                SELECT result, status
+                FROM agent_runs 
+                WHERE agent_id = ?
+                ORDER BY started_at DESC
+                LIMIT 1
+            """, (agent_id,))
+            row = cursor.fetchone()
+            
+            if not row:
+                return {"output": [], "status": "no_output"}
+            
+            try:
+                result = json.loads(row['result']) if row['result'] else {}
+                # Handle different result formats
+                if isinstance(result, str):
+                    output = [result]
+                elif isinstance(result, dict) and 'result' in result:
+                    output = [result['result']]
+                elif isinstance(result, list):
+                    output = result
+                else:
+                    output = [str(result)]
+                    
+                return {
+                    "output": output,
+                    "status": row['status']
+                }
+            except json.JSONDecodeError:
+                # If result is not valid JSON, return it as a single string
+                return {
+                    "output": [str(row['result'])],
+                    "status": row['status']
+                }
+                
+    except Exception as e:
+        logger.error(f"Failed to get agent output: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/agents/{agent_id}/runs")
+async def get_agent_runs(agent_id: str):
+    """Get all runs for an agent"""
+    try:
+        with db.get_conn() as conn:
+            cursor = conn.execute("""
+                SELECT run_id, task, status, result, started_at, completed_at
+                FROM agent_runs 
+                WHERE agent_id = ?
+                ORDER BY started_at DESC
+            """, (agent_id,))
+            rows = cursor.fetchall()
+            
+            runs = []
+            for row in rows:
+                try:
+                    task = json.loads(row['task']) if row['task'] else {}
+                    result = json.loads(row['result']) if row['result'] else {}
+                except json.JSONDecodeError:
+                    task = {"raw": row['task']}
+                    result = {"raw": row['result']}
+                    
+                runs.append({
+                    "run_id": row['run_id'],
+                    "task": task,
+                    "status": row['status'],
+                    "result": result,
+                    "started_at": row['started_at'],
+                    "completed_at": row['completed_at']
+                })
+            
+            return runs
+    except Exception as e:
+        logger.error(f"Failed to get agent runs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
