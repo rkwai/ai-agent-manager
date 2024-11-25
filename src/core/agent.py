@@ -11,6 +11,7 @@ class Agent:
     tools: list
     temperature: float
     status: str = 'inactive'
+    type: str = 'default'
     created_at: Optional[datetime] = None
     
     def __post_init__(self):
@@ -21,6 +22,9 @@ class Agent:
             raise ValueError("Model name cannot be empty")
         if self.name.strip() == "":
             raise ValueError("Agent name cannot be empty")
+        # Convert temperature to float if it's a string
+        if isinstance(self.temperature, str):
+            self.temperature = float(self.temperature)
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Agent':
@@ -28,9 +32,10 @@ class Agent:
         return cls(
             id=data['agent_id'],
             name=data['name'],
+            type=data.get('type', 'default'),
             model_name=data.get('model_name', 'gpt-3.5-turbo'),
             tools=data.get('tools', []),
-            temperature=data.get('temperature', 0.7),
+            temperature=float(data.get('temperature', 0.7)),
             status=data.get('status', 'inactive'),
             created_at=data.get('created_at')
         )
@@ -40,11 +45,17 @@ class Agent:
         return {
             "agent_id": self.id,
             "name": self.name,
+            "type": self.type,
             "model_name": self.model_name,
             "tools": self.tools,
             "temperature": self.temperature,
             "status": self.status,
-            "created_at": self.created_at
+            "created_at": self.created_at,
+            "config": {
+                "model_name": self.model_name,
+                "tools": self.tools,
+                "temperature": self.temperature
+            }
         }
     
     async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:

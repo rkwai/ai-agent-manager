@@ -33,30 +33,58 @@ class AgentManager:
         
     def _row_to_agent(self, row: Row) -> Agent:
         """Convert database row to Agent instance"""
-        config = json.loads(row['config'])
-        agent_type = row.get('type', 'default')
-        
-        # Get the appropriate agent class
-        agent_class = self._agent_classes.get(agent_type, Agent)
-        
-        # Create agent instance
-        return agent_class(
-            id=row['agent_id'],
-            name=row['name'],
-            model_name=config.get('model_name', 'gpt-3.5-turbo'),
-            tools=config.get('tools', []),
-            temperature=config.get('temperature', 0.7),
-            status=row['status'],
-            created_at=row['created_at']
-        )
+        try:
+            # Parse config with error handling
+            try:
+                config = json.loads(row['config']) if row['config'] else {}
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse config JSON: {e}")
+                config = {}
+            
+            agent_type = row.get('type', 'default')
+            logger.info(f"Creating agent with type: {agent_type}")
+            
+            # Get the appropriate agent class
+            agent_class = self._agent_classes.get(agent_type, Agent)
+            logger.info(f"Using agent class: {agent_class.__name__}")
+            
+            # Create agent instance with safe type conversion
+            agent = agent_class(
+                id=row['agent_id'],
+                name=row['name'],
+                type=agent_type,
+                model_name=config.get('model_name', 'gpt-3.5-turbo'),
+                tools=config.get('tools', []),
+                temperature=float(config.get('temperature', 0.7)),
+                status=row['status'],
+                created_at=row['created_at']
+            )
+            
+            logger.info(f"Successfully created agent instance: {agent.to_dict()}")
+            return agent
+            
+        except Exception as e:
+            logger.error(f"Error converting database row to agent: {str(e)}", exc_info=True)
+            raise
         
     async def get_agent(self, agent_id: str) -> Agent:
-        """Get agent by ID"""
+        """Get agent by ID
+        
+        Args:
+            agent_id: The ID of the agent to retrieve
+            
+        Returns:
+            Agent instance
+            
+        Raises:
+            ValueError: If agent not found
+        """
         with self.db.get_conn() as conn:
-            row = conn.execute(
+            cursor = conn.execute(
                 "SELECT * FROM agents WHERE agent_id = ?",
                 (agent_id,)
-            ).fetchone()
+            )
+            row = cursor.fetchone()
             
             if not row:
                 raise ValueError(f"Agent {agent_id} not found")
@@ -103,6 +131,115 @@ class AgentManager:
             raise
             
     async def run_task(self, agent_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
-        """Run a task with the specified agent"""
+        """Run a task with the specified agent
+        
+        Args:
+            agent_id: ID of the agent to use
+            task: Task configuration and parameters
+            
+        Returns:
+            Task execution results
+            
+        Raises:
+            ValueError: If agent not found
+        """
         agent = await self.get_agent(agent_id)
         return await agent.execute_task(task)
+
+    async def get_all_agents(self) -> List[Dict[str, Any]]:
+        """Get all agents from the database"""
+        try:
+            with self.db.get_conn() as conn:
+                rows = conn.execute("SELECT * FROM agents").fetchall()
+                agents = []
+                for row in rows:
+                    try:
+                        config = json.loads(row["config"]) if row["config"] else {}
+                        agents.append({
+                            "id": row["agent_id"],
+                            "name": row["name"],
+                            "type": row["type"] if "type" in row.keys() else "default",
+                            "status": row["status"],
+                            "config": config,
+                            "created_at": row["created_at"]
+                        })
+                    except Exception as e:
+                        logger.error(f"Error processing agent row {row['agent_id']}: {e}")
+                        continue
+                return agents
+        except Exception as e:
+            logger.error(f"Failed to get all agents: {e}")
+            raise
+
+    async def update_agent(self, agent_id: str, agent_data: Dict[str, Any]) -> None:
+        """Update an existing agent
+        
+        Args:
+            agent_id: ID of the agent to update
+            agent_data: New agent data including name, type, and config
+        
+        Raises:
+            ValueError: If agent not found
+        """
+        try:
+            with self.db.get_conn() as conn:
+                # Check if agent exists
+                existing = conn.execute(
+                    "SELECT agent_id FROM agents WHERE agent_id = ?",
+                    (agent_id,)
+                ).fetchone()
+                
+                if not existing:
+                    raise ValueError(f"Agent {agent_id} not found")
+                
+                # Update the agent
+                conn.execute("""
+                    UPDATE agents 
+                    SET name = ?, config = ?, type = ?
+                    WHERE agent_id = ?
+                """, (
+                    agent_data["name"],
+                    json.dumps(agent_data["config"]),
+                    agent_data["type"],
+                    agent_id
+                ))
+                conn.commit()
+                
+                logger.info(f"Updated agent {agent_id}")
+                
+        except Exception as e:
+            logger.error(f"Failed to update agent {agent_id}: {e}")
+            raise
+
+    async def delete_agent(self, agent_id: str) -> None:
+        """Delete an agent and its related data
+        
+        Args:
+            agent_id: ID of the agent to delete
+        
+        Raises:
+            ValueError: If agent not found
+        """
+        try:
+            with self.db.get_conn() as conn:
+                # Check if agent exists
+                existing = conn.execute(
+                    "SELECT agent_id FROM agents WHERE agent_id = ?",
+                    (agent_id,)
+                ).fetchone()
+                
+                if not existing:
+                    raise ValueError(f"Agent {agent_id} not found")
+                
+                # First delete from agent_states (due to foreign key constraint)
+                conn.execute("DELETE FROM agent_states WHERE agent_id = ?", (agent_id,))
+                
+                # Then delete the agent
+                conn.execute("DELETE FROM agents WHERE agent_id = ?", (agent_id,))
+                conn.commit()
+                
+                logger.info(f"Deleted agent {agent_id}")
+                
+        except Exception as e:
+            logger.error(f"Failed to delete agent {agent_id}: {e}")
+            raise

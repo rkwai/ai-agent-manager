@@ -2,6 +2,7 @@
 from fastapi import APIRouter, HTTPException
 from typing import Dict, Any, Optional
 import logging
+import json
 
 from src.core.agent_manager import AgentManager
 from src.database.db_setup import Database
@@ -62,4 +63,76 @@ async def update_agent_config(agent_id: str, config_updates: Dict[str, Any]):
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to update config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/agents")
+async def get_agents():
+    """Get all agents"""
+    try:
+        agents = await agent_manager.get_all_agents()
+        return agents
+    except Exception as e:
+        logger.error(f"Failed to get agents: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/agents/{agent_id}")
+async def get_agent(agent_id: str):
+    """Get a specific agent by ID"""
+    try:
+        agent = await agent_manager.get_agent(agent_id)
+        return agent
+    except ValueError as e:
+        logger.error(f"Agent not found: {agent_id}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to get agent: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/agent-types")
+async def get_agent_types():
+    """Get all available agent types"""
+    try:
+        agent_types = [
+            {
+                "type": agent_type,
+                "name": agent_class.__name__,
+                "description": agent_class.__doc__ or "No description available"
+            }
+            for agent_type, agent_class in agent_manager._agent_classes.items()
+        ]
+        # Add default agent type
+        agent_types.append({
+            "type": "default",
+            "name": "Default Agent",
+            "description": "Basic agent with default capabilities"
+        })
+        return agent_types
+    except Exception as e:
+        logger.error(f"Failed to get agent types: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/agents/{agent_id}")
+async def update_agent(agent_id: str, agent_data: Dict[str, Any]):
+    """Update an existing agent"""
+    try:
+        await agent_manager.update_agent(agent_id, agent_data)
+        return {"status": "updated", "agent_id": agent_id}
+    except ValueError as e:
+        logger.error(f"Agent not found: {agent_id}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to update agent: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/agents/{agent_id}")
+async def delete_agent(agent_id: str):
+    """Delete an agent"""
+    try:
+        await agent_manager.delete_agent(agent_id)
+        return {"status": "deleted", "agent_id": agent_id}
+    except ValueError as e:
+        logger.error(f"Agent not found: {agent_id}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to delete agent: {e}")
         raise HTTPException(status_code=500, detail=str(e))

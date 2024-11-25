@@ -189,6 +189,14 @@
                         </div>
 
                         <div class="form-group">
+                            <label for="agentType">Agent Type:</label>
+                            <select id="agentType" required>
+                                <option value="storyteller">Storyteller</option>
+                                <option value="default">Default</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
                             <label for="temperature">Temperature (0-1):</label>
                             <input type="number" id="temperature" min="0" max="1" step="0.1" value="0.7" required>
                         </div>
@@ -240,26 +248,42 @@
 
         async function loadAgents() {
             try {
+                console.log("Loading agents...");
                 const response = await fetch('/api/agents');
+                console.log("Response status:", response.status);
+                
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
+                
                 const agents = await response.json();
+                console.log("Received agents:", agents);
+                
                 const agentsList = document.getElementById('agentsList');
                 
                 // Ensure agents is an array
                 const agentsArray = Array.isArray(agents) ? agents : [];
+                console.log("Processed agents array:", agentsArray);
+                
+                if (agentsArray.length === 0) {
+                    agentsList.innerHTML = '<div class="info">No agents found. Create one to get started!</div>';
+                    return;
+                }
                 
                 agentsList.innerHTML = agentsArray.map(agent => `
                     <div class="agent-item ${agent.id === selectedAgent ? 'selected' : ''}" 
                          data-agent-id="${agent.id}"
                          onclick="selectAgent('${agent.id}')">
                         <h3>${agent.name}</h3>
+                        <p>Type: ${agent.type || 'default'}</p>
                         <p>Status: ${agent.status}</p>
                         <p>Model: ${agent.config?.model_name || 'gpt-3.5-turbo'}</p>
                         <p>Temperature: ${agent.config?.temperature || '0.7'}</p>
+                        <p>Created: ${new Date(agent.created_at).toLocaleString()}</p>
                     </div>
                 `).join('');
+                console.log("Updated agents list HTML");
+                
             } catch (error) {
                 console.error('Error loading agents:', error);
                 document.getElementById('agentsList').innerHTML = 
@@ -293,6 +317,32 @@
             document.getElementById('agentDetails').classList.remove('active');
         }
 
+        async function loadAgentTypes() {
+            try {
+                const response = await fetch('/api/agent-types');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const agentTypes = await response.json();
+                const agentTypeSelect = document.getElementById('agentType');
+                
+                // Clear existing options
+                agentTypeSelect.innerHTML = '';
+                
+                // Add agent types with descriptions
+                agentTypes.forEach(type => {
+                    const option = document.createElement('option');
+                    option.value = type.type;
+                    option.text = type.name;
+                    option.title = type.description; // Adds a tooltip with the description
+                    agentTypeSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading agent types:', error);
+                showError('Failed to load agent types');
+            }
+        }
+
         async function createNewAgent() {
             hideAllPanels();
             // Reset form
@@ -305,6 +355,8 @@
             // Reset tools selection
             const toolsSelect = document.getElementById('tools');
             Array.from(toolsSelect.options).forEach(option => option.selected = false);
+            // Load agent types
+            await loadAgentTypes();
             // Show form
             document.getElementById('agentForm').style.display = 'block';
         }
@@ -408,17 +460,21 @@
                 document.getElementById('agentId').value = selectedAgent;
                 document.getElementById('agentName').value = agent.name;
                 
+                // Set agent type
+                const agentTypeSelect = document.getElementById('agentType');
+                agentTypeSelect.value = agent.type || 'default';
+                
                 // Set model name with fallback
                 const modelSelect = document.getElementById('modelName');
-                modelSelect.value = agent.model_name || 'gpt-3.5-turbo';
+                modelSelect.value = agent.config?.model_name || 'gpt-3.5-turbo';
                 
                 // Set temperature with fallback
                 const temperatureInput = document.getElementById('temperature');
-                temperatureInput.value = agent.temperature !== undefined ? agent.temperature : 0.7;
+                temperatureInput.value = agent.config?.temperature || 0.7;
                 
                 // Set selected tools with proper type checking
                 const toolsSelect = document.getElementById('tools');
-                const tools = Array.isArray(agent.tools) ? agent.tools : [];
+                const tools = agent.config?.tools || [];
                 Array.from(toolsSelect.options).forEach(option => {
                     option.selected = tools.some(tool => 
                         typeof tool === 'string' ? tool === option.value : 
@@ -477,8 +533,9 @@
             }, 1000);
         }
 
-        // Load agents when page loads
+        // Load agents and agent types when page loads
         loadAgents();
+        loadAgentTypes();
 
         // Add event listener for Escape key
         document.addEventListener('keydown', function(event) {
@@ -527,6 +584,7 @@
 
             const agentData = {
                 name: document.getElementById('agentName').value,
+                type: document.getElementById('agentType').value,
                 config: {
                     model_name: document.getElementById('modelName').value,
                     temperature: parseFloat(document.getElementById('temperature').value),

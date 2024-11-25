@@ -21,6 +21,7 @@ class Database:
                     name TEXT NOT NULL,
                     config TEXT NOT NULL,
                     status TEXT NOT NULL,
+                    type TEXT NOT NULL DEFAULT 'default',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 
