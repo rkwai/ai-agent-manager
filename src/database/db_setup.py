@@ -71,10 +71,44 @@ class Database:
         return [dict(row) for row in cursor.fetchall()]
 
     def delete_agent(self, agent_id: str):
-        """Delete an agent"""
+        """Delete an agent and all related records"""
         cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM agents WHERE agent_id = ?", (agent_id,))
-        self.conn.commit()
+        try:
+            # Start transaction
+            self.conn.execute("BEGIN TRANSACTION")
+            
+            # Check for any remaining foreign key references
+            tables = ['conversations', 'agent_runs', 'agent_states']
+            for table in tables:
+                count = cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE agent_id = ?", (agent_id,)).fetchone()[0]
+                if count > 0:
+                    logger.info(f"Found {count} records in {table} for agent {agent_id}")
+            
+            # Delete related records first
+            cursor.execute("DELETE FROM conversations WHERE agent_id = ?", (agent_id,))
+            logger.info(f"Deleted conversations for agent {agent_id}")
+            
+            cursor.execute("DELETE FROM agent_runs WHERE agent_id = ?", (agent_id,))
+            logger.info(f"Deleted agent_runs for agent {agent_id}")
+            
+            cursor.execute("DELETE FROM agent_states WHERE agent_id = ?", (agent_id,))
+            logger.info(f"Deleted agent_states for agent {agent_id}")
+            
+            # Finally delete the agent
+            cursor.execute("DELETE FROM agents WHERE agent_id = ?", (agent_id,))
+            logger.info(f"Deleted agent {agent_id}")
+            
+            # Commit transaction
+            self.conn.commit()
+            logger.info(f"Successfully deleted agent {agent_id} and all related records")
+            
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"Failed to delete agent {agent_id}: {str(e)}")
+            # Check if agent still exists
+            exists = cursor.execute("SELECT COUNT(*) FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()[0]
+            logger.error(f"Agent still exists: {exists}")
+            raise
 
     def update_agent(self, agent_id: str, updated_data: dict):
         """Update an agent's data"""
