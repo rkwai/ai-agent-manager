@@ -151,25 +151,40 @@ async def test_delete_agent(agent_manager, mock_db, mocker):
     assert started is True
     assert agent_id in agent_manager.active_agents
     
+    # Reset mock to track delete operations
+    mock_cursor.execute.reset_mock()
+    
     # Now delete it
     deleted = await agent_manager.delete_agent(agent_id)
     assert deleted is True
     assert agent_id not in agent_manager.active_agents
     
-    # Verify database calls
-    mock_cursor.execute.assert_any_call(
-        "DELETE FROM agent_states WHERE agent_id = ?",
-        (agent_id,)
-    )
-    mock_cursor.execute.assert_any_call(
-        "DELETE FROM agent_runs WHERE agent_id = ?",
-        (agent_id,)
-    )
-    mock_cursor.execute.assert_any_call(
-        "DELETE FROM agents WHERE agent_id = ?",
-        (agent_id,)
-    )
+    # Verify database calls in order
+    delete_calls = mock_cursor.execute.call_args_list
+    assert len(delete_calls) == 5  # Should be exactly 5 operations (1 select + 1 stop + 3 deletes)
+    
+    # First SELECT to verify agent exists
+    assert delete_calls[0].args[0] == "SELECT * FROM agents WHERE agent_id = ?"
+    assert delete_calls[0].args[1] == (agent_id,)
+    
+    # Then update status to inactive (from stop_agent)
+    assert delete_calls[1].args[0] == "UPDATE agents SET status = 'inactive' WHERE agent_id = ?"
+    assert delete_calls[1].args[1] == (agent_id,)
+    
+    # Then delete from agent_states
+    assert delete_calls[2].args[0] == "DELETE FROM agent_states WHERE agent_id = ?"
+    assert delete_calls[2].args[1] == (agent_id,)
+    
+    # Then delete from agent_runs
+    assert delete_calls[3].args[0] == "DELETE FROM agent_runs WHERE agent_id = ?"
+    assert delete_calls[3].args[1] == (agent_id,)
+    
+    # Finally delete from agents
+    assert delete_calls[4].args[0] == "DELETE FROM agents WHERE agent_id = ?"
+    assert delete_calls[4].args[1] == (agent_id,)
     
     # Test deleting non-existent agent
-    with pytest.raises(Exception):
+    # Mock database to return None for non-existent agent
+    mock_cursor.execute.return_value.fetchone.return_value = None
+    with pytest.raises(ValueError, match="Agent non-existent-id not found"):
         await agent_manager.delete_agent("non-existent-id")

@@ -238,7 +238,17 @@ Question: {input}
     async def delete_agent(self, agent_id: str) -> bool:
         """Delete an agent and clean up resources"""
         try:
-            # First stop the agent if it's running
+            # First verify the agent exists
+            with self.db.get_conn() as conn:
+                agent = conn.execute(
+                    "SELECT * FROM agents WHERE agent_id = ?",
+                    (agent_id,)
+                ).fetchone()
+                
+                if not agent:
+                    raise ValueError(f"Agent {agent_id} not found")
+            
+            # Stop the agent if it's running
             if agent_id in self.active_agents:
                 await self.stop_agent(agent_id)
             
