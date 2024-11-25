@@ -1,39 +1,55 @@
 # src/core/agent_manager.py
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Type
 import uuid
 import json
 from datetime import datetime
 import logging
-from langchain_openai import ChatOpenAI
-from langchain.agents import create_react_agent
-from langchain.memory import ConversationBufferMemory
+from sqlite3 import Connection, Row
 from src.database.db_setup import Database
 from .agent import Agent
-import sqlite3
-from langchain_core.prompts import PromptTemplate
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class AgentManager:
+    """Manages agent lifecycle and task execution"""
+    
     def __init__(self, database=None, db_path=":memory:"):
         """Initialize AgentManager with either a database instance or path"""
         self.db = database if database is not None else Database(db_path)
         self.active_agents = {}
+        self._agent_classes = {}
         
-    def _row_to_agent(self, row: sqlite3.Row) -> Agent:
+    def register_agent_class(self, agent_class: Type[Agent]) -> None:
+        """Register an agent class with its type identifier
+        
+        Args:
+            agent_class: The agent class to register
+        """
+        if hasattr(agent_class, 'AGENT_TYPE'):
+            self._agent_classes[agent_class.AGENT_TYPE] = agent_class
+        else:
+            logger.warning(f"Agent class {agent_class.__name__} has no AGENT_TYPE defined")
+        
+    def _row_to_agent(self, row: Row) -> Agent:
         """Convert database row to Agent instance"""
         config = json.loads(row['config'])
-        return Agent(
+        agent_type = row.get('type', 'default')
+        
+        # Get the appropriate agent class
+        agent_class = self._agent_classes.get(agent_type, Agent)
+        
+        # Create agent instance
+        return agent_class(
             id=row['agent_id'],
             name=row['name'],
-            model_name=config['model_name'],
-            tools=config['tools'],
-            temperature=config['temperature'],
+            model_name=config.get('model_name', 'gpt-3.5-turbo'),
+            tools=config.get('tools', []),
+            temperature=config.get('temperature', 0.7),
             status=row['status'],
             created_at=row['created_at']
         )
-    
+        
     async def get_agent(self, agent_id: str) -> Agent:
         """Get agent by ID"""
         with self.db.get_conn() as conn:
@@ -47,255 +63,46 @@ class AgentManager:
                 
             return self._row_to_agent(row)
         
-    async def create_agent(self, name: str, config: Dict[str, Any]) -> str:
-        """Create a new agent with given configuration"""
+    async def create_agent(
+        self, 
+        name: str, 
+        agent_type: str,
+        config: Dict[str, Any]
+    ) -> str:
+        """Create a new agent
+        
+        Args:
+            name: Name of the agent
+            agent_type: Type identifier for the agent
+            config: Initial configuration for the agent
+            
+        Returns:
+            The ID of the created agent
+        """
         agent_id = str(uuid.uuid4())
         
-        # Validate config has required fields
-        required_fields = ['tools', 'model_name']
-        if not all(field in config for field in required_fields):
-            raise ValueError(f"Config missing required fields: {required_fields}")
-            
         try:
-            # Store in database using direct SQL instead of helper method
             with self.db.get_conn() as conn:
-                # First insert: Create the agent record
+                # Create the agent record
                 conn.execute("""
-                    INSERT INTO agents (agent_id, name, config, status)
-                    VALUES (?, ?, ?, ?)
-                """, (agent_id, name, json.dumps(config), "inactive"))
+                    INSERT INTO agents (agent_id, name, config, status, type)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (agent_id, name, json.dumps(config), "inactive", agent_type))
                 
-                # Second insert: Initialize agent state
+                # Initialize agent state
                 conn.execute("""
                     INSERT INTO agent_states (agent_id, memory)
                     VALUES (?, ?)
                 """, (agent_id, json.dumps({})))
                 
-            logger.info(f"Created agent: {agent_id} ({name})")
+            logger.info(f"Created {agent_type} agent: {agent_id} ({name})")
             return agent_id
             
         except Exception as e:
             logger.error(f"Failed to create agent: {e}")
             raise
-
-    async def start_agent(self, agent_id: str) -> bool:
-        """Start an agent and load it into memory"""
-        try:
-            with self.db.get_conn() as conn:
-                row = conn.execute(
-                    "SELECT * FROM agents WHERE agent_id = ?",
-                    (agent_id,)
-                ).fetchone()
-                
-                if not row:
-                    raise ValueError(f"Agent {agent_id} not found")
-                
-                config = json.loads(row['config'])
-                
-                # Initialize tools
-                tools = self._initialize_tools(config['tools'])
-                
-                # Create prompt template
-                prompt = self._create_prompt_template()
-                
-                # Initialize LangChain components
-                llm = ChatOpenAI(
-                    temperature=config.get('temperature', 0),
-                    model=config['model_name']
-                )
-                
-                # Create the agent
-                agent_executor = create_react_agent(
-                    llm=llm,
-                    tools=tools,
-                    prompt=prompt
-                )
-                
-                # Store in memory
-                self.active_agents[agent_id] = agent_executor
-                
-                # Update status
-                conn.execute(
-                    "UPDATE agents SET status = ? WHERE agent_id = ?",
-                    ("active", agent_id)
-                )
-                
-                return True
-                
-        except Exception as e:
-            logger.error(f"Failed to start agent {agent_id}: {e}")
-            return False
-
-    def _initialize_tools(self, tool_configs: List[Dict[str, Any]]) -> List[Any]:
-        """Initialize agent tools based on configuration"""
-        from langchain.tools import Tool
-        
-        tools = []
-        for tool_config in tool_configs:
-            if tool_config["type"] == "code_interpreter":
-                tools.append(
-                    Tool(
-                        name="code_interpreter",
-                        func=lambda x: "Code execution not implemented",
-                        description="Execute code snippets"
-                    )
-                )
-        return tools
-
-    def _create_prompt_template(self) -> PromptTemplate:
-        """Create the agent prompt template"""
-        template = """You are a helpful AI assistant.
-
-Available tools:
-{tools}
-
-Use the following format:
-Question: the input question you must answer
-Thought: you should always think about what to do
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can repeat N times)
-Thought: I now know the final answer
-Final Answer: the final answer to the original input question
-
-Question: {input}
-{agent_scratchpad}"""
-
-        return PromptTemplate.from_template(template)
-
-    async def run_task(self, agent_id: str, task: dict) -> dict:
-        if "input" not in task:
-            raise ValueError("Task must contain 'input' field")
-        """Execute a task with specified agent"""
-        try:
-            # Get agent instance
-            agent = self.active_agents.get(agent_id)
-            if not agent:
-                raise ValueError(f"Agent {agent_id} not active")
             
-            # Execute task
-            result = await agent.ainvoke(task)
-            
-            # Store run in database
-            run_id = str(uuid.uuid4())
-            with self.db.get_conn() as conn:
-                conn.execute("""
-                    INSERT INTO agent_runs (run_id, agent_id, task, status, result, started_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (run_id, agent_id, json.dumps(task), "completed", 
-                      json.dumps(result), datetime.now()))
-            
-            return {
-                "run_id": run_id,
-                "result": "Task completed",
-                "output": result
-            }
-            
-        except Exception as e:
-            logger.error(f"Task execution failed: {e}")
-            raise
-
-    async def stop_agent(self, agent_id: str) -> bool:
-        """Stop an agent and remove from memory"""
-        try:
-            if agent_id in self.active_agents:
-                del self.active_agents[agent_id]
-                
-            with self.db.get_conn() as conn:
-                conn.execute(
-                    "UPDATE agents SET status = 'inactive' WHERE agent_id = ?",
-                    (agent_id,)
-                )
-            
-            logger.info(f"Stopped agent: {agent_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to stop agent {agent_id}: {e}")
-            return False
-
-    async def list_agents(self) -> List[Dict[str, Any]]:
-        """List all agents"""
-        try:
-            with self.db.get_conn() as conn:
-                rows = conn.execute(
-                    "SELECT agent_id, name, status, config FROM agents"
-                ).fetchall()
-                
-                return [
-                    {
-                        "id": row["agent_id"],
-                        "name": row["name"],
-                        "status": row["status"]
-                    }
-                    for row in rows
-                ]
-        except Exception as e:
-            logger.error(f"Failed to list agents: {e}")
-            raise
-
-    async def delete_agent(self, agent_id: str) -> bool:
-        """Delete an agent and clean up resources"""
-        try:
-            # First verify the agent exists
-            with self.db.get_conn() as conn:
-                agent = conn.execute(
-                    "SELECT * FROM agents WHERE agent_id = ?",
-                    (agent_id,)
-                ).fetchone()
-                
-                if not agent:
-                    raise ValueError(f"Agent {agent_id} not found")
-            
-            # Stop the agent if it's running
-            if agent_id in self.active_agents:
-                await self.stop_agent(agent_id)
-            
-            # Delete from database
-            with self.db.get_conn() as conn:
-                # Delete from agent_states
-                conn.execute("DELETE FROM agent_states WHERE agent_id = ?", (agent_id,))
-                # Delete from agent_runs
-                conn.execute("DELETE FROM agent_runs WHERE agent_id = ?", (agent_id,))
-                # Delete from agents
-                conn.execute("DELETE FROM agents WHERE agent_id = ?", (agent_id,))
-                
-            logger.info(f"Deleted agent: {agent_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to delete agent {agent_id}: {e}")
-            raise
-
-    async def update_agent(self, agent_id: str, update_data: Dict[str, Any]) -> bool:
-        """Update an agent's configuration and name"""
-        try:
-            # Validate the agent exists
-            with self.db.get_conn() as conn:
-                agent = conn.execute(
-                    "SELECT * FROM agents WHERE agent_id = ?",
-                    (agent_id,)
-                ).fetchone()
-                
-                if not agent:
-                    raise ValueError(f"Agent {agent_id} not found")
-                
-                # Update the agent record
-                conn.execute("""
-                    UPDATE agents 
-                    SET name = ?, config = ?
-                    WHERE agent_id = ?
-                """, (update_data['name'], json.dumps(update_data['config']), agent_id))
-                
-                # If agent is active, update its configuration in memory
-                if agent_id in self.active_agents:
-                    await self.stop_agent(agent_id)
-                    await self.start_agent(agent_id)
-                
-                logger.info(f"Updated agent: {agent_id}")
-                return True
-                
-        except Exception as e:
-            logger.error(f"Failed to update agent {agent_id}: {e}")
-            raise
+    async def run_task(self, agent_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
+        """Run a task with the specified agent"""
+        agent = await self.get_agent(agent_id)
+        return await agent.execute_task(task)

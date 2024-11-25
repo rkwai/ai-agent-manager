@@ -2,12 +2,23 @@ import pytest
 from unittest.mock import ANY
 import uuid
 import json
+from datetime import datetime
+from src.core.agent import Agent
+
+@pytest.fixture
+def agent_manager(mock_db):
+    """Create an AgentManager instance with mocked database"""
+    from src.core.agent_manager import AgentManager
+    manager = AgentManager(database=mock_db)
+    # Register the default Agent class
+    Agent.AGENT_TYPE = "default"  # Add type identifier to base Agent class
+    manager.register_agent_class(Agent)
+    return manager
 
 @pytest.mark.asyncio
 async def test_create_agent(agent_manager, mock_db):
     """Test agent creation through manager"""
     agent_config = {
-        "name": "test_agent",
         "model_name": "gpt-4-turbo-preview",
         "tools": [{"type": "code_interpreter"}],
         "temperature": 0.7
@@ -17,7 +28,11 @@ async def test_create_agent(agent_manager, mock_db):
     mock_cursor = mock_db.get_conn.return_value.__enter__.return_value
     mock_cursor.execute.return_value.lastrowid = 1
     
-    agent_id = await agent_manager.create_agent(agent_config["name"], agent_config)
+    agent_id = await agent_manager.create_agent(
+        name="test_agent",
+        agent_type="default",
+        config=agent_config
+    )
     
     # Add this to debug the actual calls
     print("Database calls:", [
@@ -35,10 +50,6 @@ async def test_create_agent(agent_manager, mock_db):
 @pytest.mark.asyncio
 async def test_agent_lifecycle(agent_manager, mock_db, mocker):
     """Test agent lifecycle operations"""
-    # Mock LangChain components
-    mocker.patch('langchain_openai.ChatOpenAI')
-    mocker.patch('langchain.agents.create_react_agent', return_value=mocker.Mock())
-    
     config = {
         "model_name": "gpt-4-turbo-preview",
         "tools": [{"type": "code_interpreter"}],
@@ -52,34 +63,28 @@ async def test_agent_lifecycle(agent_manager, mock_db, mocker):
         "agent_id": "test-id",
         "name": "test-agent",
         "status": "inactive",
-        "config": json.dumps(config)
+        "type": "default",
+        "config": json.dumps(config),
+        "created_at": datetime.now().isoformat()
     }
     
-    agent_id = await agent_manager.create_agent("test_agent", config)
-    
-    # Test start
-    started = await agent_manager.start_agent(agent_id)
-    assert started is True
-    assert agent_id in agent_manager.active_agents
-    
-    # Test stop
-    stopped = await agent_manager.stop_agent(agent_id)
-    assert stopped is True
-    assert agent_id not in agent_manager.active_agents
-    
-    # Add assertions for state changes
-    mock_cursor.execute.assert_any_call(
-        "UPDATE agents SET status = ? WHERE agent_id = ?",
-        ("active", agent_id)
+    agent_id = await agent_manager.create_agent(
+        name="test_agent",
+        agent_type="default",
+        config=config
     )
+    
+    # Get agent
+    agent = await agent_manager.get_agent(agent_id)
+    assert agent.id == "test-id"
+    assert agent.name == "test-agent"
+    assert agent.status == "inactive"
+    assert agent.model_name == config["model_name"]
+    assert agent.temperature == config["temperature"]
 
 @pytest.mark.asyncio
 async def test_run_task(agent_manager, mock_db, mocker):
     """Test task execution"""
-    # Mock OpenAI and LangChain components
-    mocker.patch('langchain_openai.ChatOpenAI')
-    mocker.patch('langchain.agents.create_react_agent', return_value=mocker.Mock())
-    
     config = {
         "model_name": "gpt-4-turbo-preview",
         "tools": [{"type": "code_interpreter"}],
@@ -92,99 +97,48 @@ async def test_run_task(agent_manager, mock_db, mocker):
         "agent_id": "test-id",
         "name": "test-agent",
         "status": "inactive",
-        "config": json.dumps(config)
+        "type": "default",
+        "config": json.dumps(config),
+        "created_at": datetime.now().isoformat()
     }
     
-    agent_id = await agent_manager.create_agent("test_agent", config)
+    agent_id = await agent_manager.create_agent(
+        name="test_agent",
+        agent_type="default",
+        config=config
+    )
     
-    # Start agent
-    await agent_manager.start_agent(agent_id)
-    
-    # Mock the agent's ainvoke method to return a coroutine
-    mock_agent = mocker.Mock()
-    mock_agent.ainvoke = mocker.AsyncMock(return_value={"output": "Task completed successfully"})
-    agent_manager.active_agents[agent_id] = mock_agent
+    # Mock the execute_task method
+    mock_execute = mocker.AsyncMock(return_value={"output": "Task completed successfully"})
+    mocker.patch.object(Agent, "execute_task", mock_execute)
     
     # Run task
     result = await agent_manager.run_task(agent_id, {
-        "input": "test",
-        "intermediate_steps": []
+        "task": "test_task",
+        "params": {"key": "value"}
     })
     
-    assert result["result"] == "Task completed"
-    assert "run_id" in result
+    assert result == {"output": "Task completed successfully"}
+    mock_execute.assert_called_once()
     
-    # Add error case testing
-    with pytest.raises(ValueError):
-        await agent_manager.run_task("invalid-id", {"input": "test"})
-    
-    # Test with invalid input
-    with pytest.raises(ValueError):
-        await agent_manager.run_task(agent_id, {})
+    # Test with invalid agent ID
+    mock_cursor.execute.return_value.fetchone.return_value = None
+    with pytest.raises(ValueError, match="Agent invalid-id not found"):
+        await agent_manager.run_task("invalid-id", {"task": "test"})
 
 @pytest.mark.asyncio
-async def test_delete_agent(agent_manager, mock_db, mocker):
-    """Test agent deletion"""
-    # Mock LangChain components
-    mocker.patch('langchain_openai.ChatOpenAI')
-    mocker.patch('langchain.agents.create_react_agent', return_value=mocker.Mock())
+async def test_register_agent_class(agent_manager, mock_db):
+    """Test agent class registration"""
+    class TestAgent:
+        AGENT_TYPE = "test_type"
     
-    config = {
-        "model_name": "gpt-4-turbo-preview",
-        "tools": [{"type": "code_interpreter"}],
-        "temperature": 0.7
-    }
+    # Register the test agent class
+    agent_manager.register_agent_class(TestAgent)
+    assert agent_manager._agent_classes["test_type"] == TestAgent
     
-    # Setup mock database responses
-    mock_cursor = mock_db.get_conn.return_value.__enter__.return_value
-    mock_cursor.execute.return_value.fetchone.return_value = {
-        "agent_id": "test-id",
-        "name": "test-agent",
-        "status": "inactive",
-        "config": json.dumps(config)
-    }
+    # Test registering class without AGENT_TYPE
+    class InvalidAgent:
+        pass
     
-    agent_id = await agent_manager.create_agent("test_agent", config)
-    
-    # Start the agent first
-    started = await agent_manager.start_agent(agent_id)
-    assert started is True
-    assert agent_id in agent_manager.active_agents
-    
-    # Reset mock to track delete operations
-    mock_cursor.execute.reset_mock()
-    
-    # Now delete it
-    deleted = await agent_manager.delete_agent(agent_id)
-    assert deleted is True
-    assert agent_id not in agent_manager.active_agents
-    
-    # Verify database calls in order
-    delete_calls = mock_cursor.execute.call_args_list
-    assert len(delete_calls) == 5  # Should be exactly 5 operations (1 select + 1 stop + 3 deletes)
-    
-    # First SELECT to verify agent exists
-    assert delete_calls[0].args[0] == "SELECT * FROM agents WHERE agent_id = ?"
-    assert delete_calls[0].args[1] == (agent_id,)
-    
-    # Then update status to inactive (from stop_agent)
-    assert delete_calls[1].args[0] == "UPDATE agents SET status = 'inactive' WHERE agent_id = ?"
-    assert delete_calls[1].args[1] == (agent_id,)
-    
-    # Then delete from agent_states
-    assert delete_calls[2].args[0] == "DELETE FROM agent_states WHERE agent_id = ?"
-    assert delete_calls[2].args[1] == (agent_id,)
-    
-    # Then delete from agent_runs
-    assert delete_calls[3].args[0] == "DELETE FROM agent_runs WHERE agent_id = ?"
-    assert delete_calls[3].args[1] == (agent_id,)
-    
-    # Finally delete from agents
-    assert delete_calls[4].args[0] == "DELETE FROM agents WHERE agent_id = ?"
-    assert delete_calls[4].args[1] == (agent_id,)
-    
-    # Test deleting non-existent agent
-    # Mock database to return None for non-existent agent
-    mock_cursor.execute.return_value.fetchone.return_value = None
-    with pytest.raises(ValueError, match="Agent non-existent-id not found"):
-        await agent_manager.delete_agent("non-existent-id")
+    agent_manager.register_agent_class(InvalidAgent)
+    assert "InvalidAgent" not in agent_manager._agent_classes

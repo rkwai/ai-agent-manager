@@ -47,6 +47,19 @@ class Agent:
             "created_at": self.created_at
         }
     
+    async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a task with this agent
+        
+        Args:
+            task: Dictionary containing task details
+            
+        Returns:
+            Dictionary containing task results
+            
+        This is a base implementation that should be overridden by specific agent types.
+        """
+        raise NotImplementedError("Agent subclasses must implement execute_task")
+    
     @property
     def config(self) -> Dict[str, Any]:
         """Get agent configuration"""
