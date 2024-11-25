@@ -24,6 +24,10 @@ async def list_agents():
     """List all agents"""
     try:
         agents = await agent_manager.list_agents()
+        # Convert each agent to include its config
+        for agent in agents:
+            agent_details = await agent_manager.get_agent(agent['id'])
+            agent['config'] = agent_details.config
         return agents
     except Exception as e:
         logger.error(f"Failed to list agents: {e}")
@@ -137,13 +141,29 @@ async def agent_websocket(websocket: WebSocket, agent_id: str):
         await websocket.close()
 
 @router.put("/agents/{agent_id}")
-async def update_agent(agent_id: str, config: Dict[str, Any]):
+async def update_agent(agent_id: str, agent_data: Dict[str, Any]):
     """Update agent configuration"""
     try:
-        await agent_manager.update_agent(agent_id, config)
+        # Validate required fields
+        if 'name' not in agent_data or 'config' not in agent_data:
+            raise ValueError("Missing required fields: name and config")
+            
+        # Validate config fields
+        config = agent_data['config']
+        required_fields = ['model_name', 'temperature', 'tools']
+        missing_fields = [field for field in required_fields if field not in config]
+        if missing_fields:
+            raise ValueError(f"Config missing required fields: {missing_fields}")
+            
+        # Validate temperature range
+        if not 0 <= config['temperature'] <= 1:
+            raise ValueError("Temperature must be between 0 and 1")
+            
+        # Update the agent
+        await agent_manager.update_agent(agent_id, agent_data)
         return {"status": "updated", "agent_id": agent_id}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to update agent: {e}")
         raise HTTPException(status_code=500, detail=str(e))

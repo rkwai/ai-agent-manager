@@ -56,6 +56,9 @@
             border-radius: 4px;
             margin: 10px 0;
         }
+        .message-container {
+            margin: 10px 0;
+        }
         .error-message {
             color: #721c24;
             background-color: #f8d7da;
@@ -85,23 +88,48 @@
         .state-running {
             background-color: #d4edda;
             color: #155724;
+            border: 1px solid #c3e6cb;
         }
         
         .state-stopped {
             background-color: #f8d7da;
             color: #721c24;
+            border: 1px solid #f5c6cb;
         }
         
-        .state-error {
-            background-color: #fff3cd;
+        .state-completed {
+            background-color: #cce5ff;
+            color: #004085;
+            border: 1px solid #b8daff;
+        }
+        
+        .state-unknown {
+            background-color: #ffeeba;
             color: #856404;
+            border: 1px solid #ffeeba;
+        }
+        
+        .output-panel {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .output-panel div {
+            font-family: monospace;
+            white-space: pre-wrap;
+            margin: 2px 0;
         }
         .agent-form {
             background: white;
             padding: 20px;
             border: 1px solid #ddd;
             border-radius: 4px;
-            margin-bottom: 20px;
+            margin-top: 20px;
         }
         .form-group {
             margin-bottom: 15px;
@@ -138,31 +166,70 @@
                 <h2>Agents</h2>
                 <div id="agentsList"></div>
                 <button onclick="createNewAgent()">Create New Agent</button>
-            </div>
-
-            <!-- Right panel: Agent details and controls -->
-            <div id="agentDetails" class="agent-details">
-                <div id="errorMessage" class="error-message"></div>
-                <div id="successMessage" class="success-message"></div>
                 
-                <h2 id="selectedAgentName"></h2>
-                <div id="agentState" class="agent-state"></div>
-                
-                <div class="control-panel">
-                    <button onclick="runAgent()">Run Agent</button>
-                    <button onclick="stopAgent()">Stop Agent</button>
-                    <button onclick="editAgent()">Edit Agent</button>
-                    <button onclick="deleteAgent()">Delete Agent</button>
+                <div class="message-container">
+                    <div id="errorMessage" class="error-message"></div>
+                    <div id="successMessage" class="success-message"></div>
                 </div>
 
-                <div class="editor-panel">
-                    <h3>Agent Configuration</h3>
-                    <textarea id="agentConfig" rows="10" style="width: 100%"></textarea>
+                <div id="agentForm" class="agent-form" style="display: none;">
+                    <h3 id="formTitle">Create New Agent</h3>
+                    <form onsubmit="handleAgentSubmit(event)">
+                        <div class="form-group">
+                            <label for="agentName">Agent Name:</label>
+                            <input type="text" id="agentName" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="modelName">Model:</label>
+                            <select id="modelName" required>
+                                <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                                <option value="gpt-4-turbo-preview">GPT-4 Turbo</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="temperature">Temperature (0-1):</label>
+                            <input type="number" id="temperature" min="0" max="1" step="0.1" value="0.7" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="tools">Tools:</label>
+                            <select id="tools" multiple>
+                                <option value="code_interpreter">Code Interpreter</option>
+                                <option value="web_search">Web Search</option>
+                            </select>
+                        </div>
+
+                        <input type="hidden" id="agentId">
+                        <div class="form-buttons">
+                            <button type="submit" id="submitButton">Create Agent</button>
+                            <button type="button" onclick="cancelForm()">Cancel</button>
+                        </div>
+                    </form>
                 </div>
 
-                <div class="output-panel">
-                    <h3>Output</h3>
-                    <div id="agentOutput"></div>
+                <!-- Right panel: Agent details and controls -->
+                <div id="agentDetails" class="agent-details">                    
+                    <h2 id="selectedAgentName"></h2>
+                    <div id="agentState" class="agent-state"></div>
+                    
+                    <div class="control-panel">
+                        <button onclick="runAgent()">Run Agent</button>
+                        <button onclick="stopAgent()">Stop Agent</button>
+                        <button onclick="editAgent()">Edit Agent</button>
+                        <button onclick="deleteAgent()">Delete Agent</button>
+                    </div>
+
+                    <div class="editor-panel">
+                        <h3>Agent Configuration</h3>
+                        <textarea id="agentConfig" rows="10" style="width: 100%"></textarea>
+                    </div>
+
+                    <div class="output-panel">
+                        <h3>Output</h3>
+                        <div id="agentOutput"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -189,6 +256,8 @@
                          onclick="selectAgent('${agent.id}')">
                         <h3>${agent.name}</h3>
                         <p>Status: ${agent.status}</p>
+                        <p>Model: ${agent.config?.model_name || 'gpt-3.5-turbo'}</p>
+                        <p>Temperature: ${agent.config?.temperature || '0.7'}</p>
                     </div>
                 `).join('');
             } catch (error) {
@@ -275,12 +344,32 @@
         async function runAgent() {
             if (!selectedAgent) return;
             try {
-                const response = await fetch(`/api/agents/${selectedAgent}/run`, {
-                    method: 'POST'
+                // Get current agent configuration
+                const agentResponse = await fetch(`/api/agents/${selectedAgent}`);
+                if (!agentResponse.ok) {
+                    throw new Error(`HTTP error! status: ${agentResponse.status}`);
+                }
+                const agent = await agentResponse.json();
+
+                // Prepare task input
+                const taskInput = prompt('Enter task for the agent:', '');
+                if (!taskInput) return;  // User cancelled
+
+                const response = await fetch(`/api/agents/${selectedAgent}/tasks`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        input: taskInput,
+                        config: agent.config
+                    })
                 });
+                
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
+
                 // Start polling for updates
                 pollAgentOutput();
                 showSuccess('Agent started successfully');
@@ -319,17 +408,22 @@
                 document.getElementById('agentId').value = selectedAgent;
                 document.getElementById('agentName').value = agent.name;
                 
-                // Safely access config properties with fallbacks
-                const config = typeof agent.config === 'string' ? JSON.parse(agent.config) : (agent.config || {});
-                document.getElementById('modelName').value = config.model_name || 'gpt-3.5-turbo';
-                document.getElementById('temperature').value = config.temperature || 0.7;
+                // Set model name with fallback
+                const modelSelect = document.getElementById('modelName');
+                modelSelect.value = agent.model_name || 'gpt-3.5-turbo';
                 
-                // Set selected tools
+                // Set temperature with fallback
+                const temperatureInput = document.getElementById('temperature');
+                temperatureInput.value = agent.temperature !== undefined ? agent.temperature : 0.7;
+                
+                // Set selected tools with proper type checking
                 const toolsSelect = document.getElementById('tools');
-                const tools = config.tools || [];
+                const tools = Array.isArray(agent.tools) ? agent.tools : [];
                 Array.from(toolsSelect.options).forEach(option => {
                     option.selected = tools.some(tool => 
-                        typeof tool === 'string' ? tool === option.value : tool.type === option.value
+                        typeof tool === 'string' ? tool === option.value : 
+                        typeof tool === 'object' && tool !== null ? tool.type === option.value : 
+                        false
                     );
                 });
                 
@@ -426,56 +520,6 @@
             }
         }
 
-        // Make sure the form exists in the HTML
-        // Add this to the HTML if it's not already there
-        const formHtml = `
-        <div id="agentForm" class="agent-form" style="display: none;">
-            <h3 id="formTitle">Create New Agent</h3>
-            <form onsubmit="handleAgentSubmit(event)">
-                <div class="form-group">
-                    <label for="agentName">Agent Name:</label>
-                    <input type="text" id="agentName" required>
-                </div>
-                
-                <div class="form-group">
-                    <label for="modelName">Model:</label>
-                    <select id="modelName" required>
-                        <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-                        <option value="gpt-4-turbo-preview">GPT-4 Turbo</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label for="temperature">Temperature (0-1):</label>
-                    <input type="number" id="temperature" min="0" max="1" step="0.1" value="0.7" required>
-                </div>
-
-                <div class="form-group">
-                    <label for="tools">Tools:</label>
-                    <select id="tools" multiple>
-                        <option value="code_interpreter">Code Interpreter</option>
-                        <option value="web_search">Web Search</option>
-                    </select>
-                </div>
-
-                <input type="hidden" id="agentId">
-                <div class="form-buttons">
-                    <button type="submit" id="submitButton">Create Agent</button>
-                    <button type="button" onclick="cancelForm()">Cancel</button>
-                </div>
-            </form>
-        </div>
-        `;
-
-        // Add the form to the page when it loads
-        document.addEventListener('DOMContentLoaded', function() {
-            // Find a suitable container for the form
-            const container = document.querySelector('.agents-panel');
-            if (container) {
-                container.insertAdjacentHTML('beforeend', formHtml);
-            }
-        });
-
         async function handleAgentSubmit(event) {
             event.preventDefault();
             const agentId = document.getElementById('agentId').value;
@@ -493,19 +537,38 @@
             };
 
             try {
+                let response;
                 if (isEdit) {
-                    await fetch(`/api/agents/${agentId}`, {
+                    response = await fetch(`/api/agents/${agentId}`, {
                         method: 'PUT',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify(agentData)
                     });
+                    
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.detail || 'Failed to update agent');
+                    }
+                    
+                    // Wait for the response to ensure update was successful
+                    const result = await response.json();
+                    if (result.status !== 'updated') {
+                        throw new Error('Failed to update agent: Unexpected response');
+                    }
+                    
                     showSuccess('Agent updated successfully');
                 } else {
-                    await fetch('/api/agents', {
+                    response = await fetch('/api/agents', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify(agentData)
                     });
+                    
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.detail || 'Failed to create agent');
+                    }
+                    
                     showSuccess('Agent created successfully');
                 }
                 
@@ -516,7 +579,8 @@
                     await selectAgent(agentId);
                 }
             } catch (error) {
-                showError(`Failed to ${isEdit ? 'update' : 'create'} agent`);
+                console.error('Error:', error);
+                showError(error.message || `Failed to ${isEdit ? 'update' : 'create'} agent`);
             }
         }
     </script>
