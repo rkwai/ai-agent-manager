@@ -14,9 +14,18 @@
             padding: 10px;
             border-radius: 4px;
             cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
         }
         .agent-item:hover {
             background-color: #f5f5f5;
+            transform: translateX(2px);
+        }
+        .agent-item.selected {
+            background-color: #e3f2fd;
+            border-color: #2196f3;
+            border-left: 4px solid #2196f3;
+            box-shadow: 0 2px 4px rgba(33, 150, 243, 0.1);
         }
         .agent-details {
             display: none;
@@ -47,6 +56,76 @@
             border-radius: 4px;
             margin: 10px 0;
         }
+        .error-message {
+            color: #721c24;
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            display: none;
+        }
+        .success-message {
+            color: #155724;
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            display: none;
+        }
+        .agent-state {
+            padding: 5px 10px;
+            margin-bottom: 15px;
+            display: inline-block;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        
+        .state-running {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        
+        .state-stopped {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        
+        .state-error {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .agent-form {
+            background: white;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .form-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        #tools {
+            height: 100px;
+        }
     </style>
 </head>
 <body>
@@ -58,16 +137,16 @@
             <div class="agents-panel">
                 <h2>Agents</h2>
                 <div id="agentsList"></div>
-
-                <form onsubmit="createAgent(event)">
-                    <input type="text" id="agentName" required placeholder="Enter agent name">
-                    <button type="submit">Create Agent</button>
-                </form>
+                <button onclick="createNewAgent()">Create New Agent</button>
             </div>
 
             <!-- Right panel: Agent details and controls -->
             <div id="agentDetails" class="agent-details">
+                <div id="errorMessage" class="error-message"></div>
+                <div id="successMessage" class="success-message"></div>
+                
                 <h2 id="selectedAgentName"></h2>
+                <div id="agentState" class="agent-state"></div>
                 
                 <div class="control-panel">
                     <button onclick="runAgent()">Run Agent</button>
@@ -105,7 +184,9 @@
                 const agentsArray = Array.isArray(agents) ? agents : [];
                 
                 agentsList.innerHTML = agentsArray.map(agent => `
-                    <div class="agent-item" onclick="selectAgent('${agent.id}')">
+                    <div class="agent-item ${agent.id === selectedAgent ? 'selected' : ''}" 
+                         data-agent-id="${agent.id}"
+                         onclick="selectAgent('${agent.id}')">
                         <h3>${agent.name}</h3>
                         <p>Status: ${agent.status}</p>
                     </div>
@@ -131,15 +212,45 @@
                 }
                 nameInput.value = '';
                 await loadAgents();
+                showSuccess('Agent created successfully');
             } catch (error) {
                 console.error('Error creating agent:', error);
-                alert('Failed to create agent. Please try again.');
+                showError('Failed to create agent. Please try again.');
             }
+        }
+
+        function hideAllPanels() {
+            document.getElementById('agentForm').style.display = 'none';
+            document.getElementById('agentDetails').classList.remove('active');
+        }
+
+        async function createNewAgent() {
+            hideAllPanels();
+            // Reset form
+            document.getElementById('formTitle').textContent = 'Create New Agent';
+            document.getElementById('submitButton').textContent = 'Create Agent';
+            document.getElementById('agentId').value = '';
+            document.getElementById('agentName').value = '';
+            document.getElementById('modelName').value = 'gpt-3.5-turbo';
+            document.getElementById('temperature').value = '0.7';
+            // Reset tools selection
+            const toolsSelect = document.getElementById('tools');
+            Array.from(toolsSelect.options).forEach(option => option.selected = false);
+            // Show form
+            document.getElementById('agentForm').style.display = 'block';
         }
 
         async function selectAgent(agentId) {
             try {
+                hideAllPanels();
                 selectedAgent = agentId;
+                
+                // Update visual selection
+                document.querySelectorAll('.agent-item').forEach(item => {
+                    item.classList.remove('selected');
+                });
+                document.querySelector(`.agent-item[data-agent-id="${agentId}"]`)?.classList.add('selected');
+                
                 const response = await fetch(`/api/agents/${agentId}`);
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
@@ -149,54 +260,265 @@
                 document.getElementById('agentDetails').classList.add('active');
                 document.getElementById('selectedAgentName').textContent = agent.name;
                 document.getElementById('agentConfig').value = JSON.stringify(agent.config, null, 2);
+                
+                // Add state display
+                const stateElement = document.getElementById('agentState');
+                stateElement.textContent = agent.status;
+                stateElement.className = 'agent-state';
+                stateElement.classList.add(`state-${agent.status.toLowerCase()}`);
             } catch (error) {
                 console.error('Error selecting agent:', error);
-                alert('Failed to load agent details. Please try again.');
+                showError('Failed to load agent details');
             }
         }
 
         async function runAgent() {
             if (!selectedAgent) return;
-            await fetch(`/api/agents/${selectedAgent}/run`, {method: 'POST'});
-            // Start polling for updates
-            pollAgentOutput();
+            try {
+                const response = await fetch(`/api/agents/${selectedAgent}/run`, {
+                    method: 'POST'
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                // Start polling for updates
+                pollAgentOutput();
+                showSuccess('Agent started successfully');
+            } catch (error) {
+                console.error('Error running agent:', error);
+                showError('Failed to run agent. Please try again.');
+            }
         }
 
         async function stopAgent() {
             if (!selectedAgent) return;
-            await fetch(`/api/agents/${selectedAgent}/stop`, {method: 'POST'});
+            try {
+                await fetch(`/api/agents/${selectedAgent}/stop`, {method: 'POST'});
+                showSuccess('Agent stopped successfully');
+            } catch (error) {
+                showError('Failed to stop agent');
+            }
         }
 
         async function editAgent() {
             if (!selectedAgent) return;
-            const config = document.getElementById('agentConfig').value;
-            await fetch(`/api/agents/${selectedAgent}`, {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: config
-            });
+            
+            try {
+                hideAllPanels();
+                // First fetch the current agent data
+                const response = await fetch(`/api/agents/${selectedAgent}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const agent = await response.json();
+                
+                // Now populate the form with the agent data
+                const form = document.getElementById('agentForm');
+                document.getElementById('formTitle').textContent = 'Edit Agent';
+                document.getElementById('submitButton').textContent = 'Update Agent';
+                document.getElementById('agentId').value = selectedAgent;
+                document.getElementById('agentName').value = agent.name;
+                
+                // Safely access config properties with fallbacks
+                const config = typeof agent.config === 'string' ? JSON.parse(agent.config) : (agent.config || {});
+                document.getElementById('modelName').value = config.model_name || 'gpt-3.5-turbo';
+                document.getElementById('temperature').value = config.temperature || 0.7;
+                
+                // Set selected tools
+                const toolsSelect = document.getElementById('tools');
+                const tools = config.tools || [];
+                Array.from(toolsSelect.options).forEach(option => {
+                    option.selected = tools.some(tool => 
+                        typeof tool === 'string' ? tool === option.value : tool.type === option.value
+                    );
+                });
+                
+                form.style.display = 'block';
+            } catch (error) {
+                console.error('Error loading agent:', error);
+                showError('Failed to load agent configuration');
+            }
         }
 
         async function deleteAgent() {
             if (!selectedAgent) return;
-            await fetch(`/api/agents/${selectedAgent}`, {method: 'DELETE'});
-            document.getElementById('agentDetails').classList.remove('active');
-            await loadAgents();
+            try {
+                const response = await fetch(`/api/agents/${selectedAgent}`, {method: 'DELETE'});
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                document.getElementById('agentDetails').classList.remove('active');
+                await loadAgents();
+                showSuccess('Agent deleted successfully');
+            } catch (error) {
+                showError('Failed to delete agent');
+            }
         }
 
-        function pollAgentOutput() {
+        async function pollAgentOutput() {
             if (!selectedAgent) return;
-            setInterval(async () => {
-                const response = await fetch(`/api/agents/${selectedAgent}/output`);
-                const output = await response.json();
-                document.getElementById('agentOutput').innerHTML = output.map(
-                    line => `<div>${line}</div>`
-                ).join('');
+            
+            // Clear existing interval if any
+            if (window.outputInterval) {
+                clearInterval(window.outputInterval);
+            }
+            
+            window.outputInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/agents/${selectedAgent}/output`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    const data = await response.json();
+                    const output = data.output || [];
+                    
+                    document.getElementById('agentOutput').innerHTML = 
+                        Array.isArray(output) ? output.map(line => `<div>${line}</div>`).join('') : 
+                        '<div class="error">Invalid output format</div>';
+                        
+                } catch (error) {
+                    console.error('Error polling output:', error);
+                    document.getElementById('agentOutput').innerHTML = 
+                        '<div class="error">Failed to get agent output</div>';
+                    clearInterval(window.outputInterval);
+                }
             }, 1000);
         }
 
         // Load agents when page loads
         loadAgents();
+
+        // Add event listener for Escape key
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                const agentDetails = document.getElementById('agentDetails');
+                const agentForm = document.getElementById('agentForm');
+                hideAllPanels();
+                selectedAgent = null;
+                document.querySelectorAll('.agent-item').forEach(item => {
+                    item.classList.remove('selected');
+                });
+            }
+        });
+
+        // Add utility functions for showing messages
+        function showError(message, duration = 5000) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+            }, duration);
+        }
+
+        function showSuccess(message, duration = 3000) {
+            const successDiv = document.getElementById('successMessage');
+            successDiv.textContent = message;
+            successDiv.style.display = 'block';
+            setTimeout(() => {
+                successDiv.style.display = 'none';
+            }, duration);
+        }
+
+        function cancelForm() {
+            hideAllPanels();
+            // If we were editing, go back to showing the agent details
+            if (selectedAgent) {
+                selectAgent(selectedAgent);
+            }
+        }
+
+        // Make sure the form exists in the HTML
+        // Add this to the HTML if it's not already there
+        const formHtml = `
+        <div id="agentForm" class="agent-form" style="display: none;">
+            <h3 id="formTitle">Create New Agent</h3>
+            <form onsubmit="handleAgentSubmit(event)">
+                <div class="form-group">
+                    <label for="agentName">Agent Name:</label>
+                    <input type="text" id="agentName" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="modelName">Model:</label>
+                    <select id="modelName" required>
+                        <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                        <option value="gpt-4-turbo-preview">GPT-4 Turbo</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="temperature">Temperature (0-1):</label>
+                    <input type="number" id="temperature" min="0" max="1" step="0.1" value="0.7" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="tools">Tools:</label>
+                    <select id="tools" multiple>
+                        <option value="code_interpreter">Code Interpreter</option>
+                        <option value="web_search">Web Search</option>
+                    </select>
+                </div>
+
+                <input type="hidden" id="agentId">
+                <div class="form-buttons">
+                    <button type="submit" id="submitButton">Create Agent</button>
+                    <button type="button" onclick="cancelForm()">Cancel</button>
+                </div>
+            </form>
+        </div>
+        `;
+
+        // Add the form to the page when it loads
+        document.addEventListener('DOMContentLoaded', function() {
+            // Find a suitable container for the form
+            const container = document.querySelector('.agents-panel');
+            if (container) {
+                container.insertAdjacentHTML('beforeend', formHtml);
+            }
+        });
+
+        async function handleAgentSubmit(event) {
+            event.preventDefault();
+            const agentId = document.getElementById('agentId').value;
+            const isEdit = !!agentId;
+
+            const agentData = {
+                name: document.getElementById('agentName').value,
+                config: {
+                    model_name: document.getElementById('modelName').value,
+                    temperature: parseFloat(document.getElementById('temperature').value),
+                    tools: Array.from(document.getElementById('tools').selectedOptions).map(opt => ({
+                        type: opt.value
+                    }))
+                }
+            };
+
+            try {
+                if (isEdit) {
+                    await fetch(`/api/agents/${agentId}`, {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(agentData)
+                    });
+                    showSuccess('Agent updated successfully');
+                } else {
+                    await fetch('/api/agents', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(agentData)
+                    });
+                    showSuccess('Agent created successfully');
+                }
+                
+                hideAllPanels();
+                await loadAgents();
+                
+                if (isEdit) {
+                    await selectAgent(agentId);
+                }
+            } catch (error) {
+                showError(`Failed to ${isEdit ? 'update' : 'create'} agent`);
+            }
+        }
     </script>
 </body>
 </html> 

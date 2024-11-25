@@ -121,3 +121,55 @@ async def test_run_task(agent_manager, mock_db, mocker):
     # Test with invalid input
     with pytest.raises(ValueError):
         await agent_manager.run_task(agent_id, {})
+
+@pytest.mark.asyncio
+async def test_delete_agent(agent_manager, mock_db, mocker):
+    """Test agent deletion"""
+    # Mock LangChain components
+    mocker.patch('langchain_openai.ChatOpenAI')
+    mocker.patch('langchain.agents.create_react_agent', return_value=mocker.Mock())
+    
+    config = {
+        "model_name": "gpt-4-turbo-preview",
+        "tools": [{"type": "code_interpreter"}],
+        "temperature": 0.7
+    }
+    
+    # Setup mock database responses
+    mock_cursor = mock_db.get_conn.return_value.__enter__.return_value
+    mock_cursor.execute.return_value.fetchone.return_value = {
+        "agent_id": "test-id",
+        "name": "test-agent",
+        "status": "inactive",
+        "config": json.dumps(config)
+    }
+    
+    agent_id = await agent_manager.create_agent("test_agent", config)
+    
+    # Start the agent first
+    started = await agent_manager.start_agent(agent_id)
+    assert started is True
+    assert agent_id in agent_manager.active_agents
+    
+    # Now delete it
+    deleted = await agent_manager.delete_agent(agent_id)
+    assert deleted is True
+    assert agent_id not in agent_manager.active_agents
+    
+    # Verify database calls
+    mock_cursor.execute.assert_any_call(
+        "DELETE FROM agent_states WHERE agent_id = ?",
+        (agent_id,)
+    )
+    mock_cursor.execute.assert_any_call(
+        "DELETE FROM agent_runs WHERE agent_id = ?",
+        (agent_id,)
+    )
+    mock_cursor.execute.assert_any_call(
+        "DELETE FROM agents WHERE agent_id = ?",
+        (agent_id,)
+    )
+    
+    # Test deleting non-existent agent
+    with pytest.raises(Exception):
+        await agent_manager.delete_agent("non-existent-id")

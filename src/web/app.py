@@ -1,8 +1,9 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, send_from_directory
 from flask_cors import CORS
 import requests
+import os
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static')
 CORS(app)
 
 # FastAPI backend URL
@@ -27,6 +28,16 @@ def proxy_to_backend(path):
     
     # Return the response from the backend
     return resp.content, resp.status_code, resp.headers.items()
+
+# Add this route specifically for favicon.ico
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(
+            # Start of Selection
+            os.path.join(app.root_path, 'static'),
+            'favicon.ico', 
+            mimetype='image/svg+xml'
+    )
 
 if __name__ == '__main__':
     app.run(debug=True, port=8080) 

@@ -234,3 +234,58 @@ Question: {input}
         except Exception as e:
             logger.error(f"Failed to list agents: {e}")
             raise
+
+    async def delete_agent(self, agent_id: str) -> bool:
+        """Delete an agent and clean up resources"""
+        try:
+            # First stop the agent if it's running
+            if agent_id in self.active_agents:
+                await self.stop_agent(agent_id)
+            
+            # Delete from database
+            with self.db.get_conn() as conn:
+                # Delete from agent_states
+                conn.execute("DELETE FROM agent_states WHERE agent_id = ?", (agent_id,))
+                # Delete from agent_runs
+                conn.execute("DELETE FROM agent_runs WHERE agent_id = ?", (agent_id,))
+                # Delete from agents
+                conn.execute("DELETE FROM agents WHERE agent_id = ?", (agent_id,))
+                
+            logger.info(f"Deleted agent: {agent_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to delete agent {agent_id}: {e}")
+            raise
+
+    async def update_agent(self, agent_id: str, update_data: Dict[str, Any]) -> bool:
+        """Update an agent's configuration and name"""
+        try:
+            # Validate the agent exists
+            with self.db.get_conn() as conn:
+                agent = conn.execute(
+                    "SELECT * FROM agents WHERE agent_id = ?",
+                    (agent_id,)
+                ).fetchone()
+                
+                if not agent:
+                    raise ValueError(f"Agent {agent_id} not found")
+                
+                # Update the agent record
+                conn.execute("""
+                    UPDATE agents 
+                    SET name = ?, config = ?
+                    WHERE agent_id = ?
+                """, (update_data['name'], json.dumps(update_data['config']), agent_id))
+                
+                # If agent is active, update its configuration in memory
+                if agent_id in self.active_agents:
+                    await self.stop_agent(agent_id)
+                    await self.start_agent(agent_id)
+                
+                logger.info(f"Updated agent: {agent_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Failed to update agent {agent_id}: {e}")
+            raise

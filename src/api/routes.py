@@ -135,3 +135,39 @@ async def agent_websocket(websocket: WebSocket, agent_id: str):
         logger.error(f"WebSocket error: {e}")
     finally:
         await websocket.close()
+
+@router.put("/agents/{agent_id}")
+async def update_agent(agent_id: str, config: Dict[str, Any]):
+    """Update agent configuration"""
+    try:
+        await agent_manager.update_agent(agent_id, config)
+        return {"status": "updated", "agent_id": agent_id}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to update agent: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/agents/{agent_id}")
+async def delete_agent(agent_id: str):
+    """Delete an agent"""
+    try:
+        await agent_manager.delete_agent(agent_id)
+        return {"status": "deleted", "agent_id": agent_id}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to delete agent: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/agents/{agent_id}/output")
+async def get_agent_output(agent_id: str):
+    """Get agent output"""
+    try:
+        output = await agent_manager.get_agent_output(agent_id)
+        return {"output": output if output else []}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to get agent output: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
